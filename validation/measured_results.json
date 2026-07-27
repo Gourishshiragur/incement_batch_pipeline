@@ -1,0 +1,77 @@
+{
+  "daily_results": [
+    {
+      "day": 0,
+      "total_rows_in_snapshot_file": 349200,
+      "dq_dropped_rows": 0,
+      "new_rows": 349200,
+      "changed_rows": 0,
+      "unchanged_rows_skipped": 0,
+      "incremental_volume_processed": 349200,
+      "reprocessing_reduction_pct_vs_full_reload": null,
+      "merged_state_row_count": 349200,
+      "gold_rows": 970,
+      "elapsed_seconds": 0.85
+    },
+    {
+      "day": 1,
+      "total_rows_in_snapshot_file": 646020,
+      "dq_dropped_rows": 0,
+      "new_rows": 349200,
+      "changed_rows": 11927,
+      "unchanged_rows_skipped": 284893,
+      "incremental_volume_processed": 361127,
+      "reprocessing_reduction_pct_vs_full_reload": 44.1,
+      "merged_state_row_count": 698400,
+      "gold_rows": 970,
+      "elapsed_seconds": 2.19
+    },
+    {
+      "day": 2,
+      "total_rows_in_snapshot_file": 898317,
+      "dq_dropped_rows": 0,
+      "new_rows": 349200,
+      "changed_rows": 21899,
+      "unchanged_rows_skipped": 527218,
+      "incremental_volume_processed": 371099,
+      "reprocessing_reduction_pct_vs_full_reload": 58.69,
+      "merged_state_row_count": 1047600,
+      "gold_rows": 970,
+      "elapsed_seconds": 3.1
+    },
+    {
+      "day": 3,
+      "total_rows_in_snapshot_file": 1112770,
+      "dq_dropped_rows": 0,
+      "new_rows": 349200,
+      "changed_rows": 30576,
+      "unchanged_rows_skipped": 732994,
+      "incremental_volume_processed": 379776,
+      "reprocessing_reduction_pct_vs_full_reload": 65.87,
+      "merged_state_row_count": 1396800,
+      "gold_rows": 970,
+      "elapsed_seconds": 3.87
+    },
+    {
+      "day": 4,
+      "total_rows_in_snapshot_file": 1295055,
+      "dq_dropped_rows": 0,
+      "new_rows": 349200,
+      "changed_rows": 37765,
+      "unchanged_rows_skipped": 908090,
+      "incremental_volume_processed": 386965,
+      "reprocessing_reduction_pct_vs_full_reload": 70.12,
+      "merged_state_row_count": 1746000,
+      "gold_rows": 970,
+      "elapsed_seconds": 4.44
+    }
+  ],
+  "summary": {
+    "days_measured": 4,
+    "avg_reprocessing_reduction_pct": 59.7,
+    "min_reprocessing_reduction_pct": 44.1,
+    "max_reprocessing_reduction_pct": 70.12,
+    "peak_daily_record_volume": 1295055,
+    "avg_pipeline_runtime_seconds": 2.89
+  }
+}
