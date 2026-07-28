@@ -5,7 +5,6 @@ Imports pipeline_core.py directly -- the SAME functions covered by
 tests/test_pipeline_logic.py -- so the numbers below come from the tested
 code path, not a parallel copy of it.
 """
-
 import sys
 import os
 import json
@@ -13,17 +12,14 @@ import time
 import pandas as pd
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from pipeline_core import (
-    silver_data_quality_gate,
-    silver_change_detection,
-    merge_upsert,
-)
+from pipeline_core import silver_data_quality_gate, silver_change_detection, merge_upsert
 
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
-OUT_DIR = PROJECT_ROOT / "validation"
+VALIDATION_DIR = PROJECT_ROOT / "validation"
+
 N_DAYS = 5
 
 
@@ -33,18 +29,13 @@ def bronze_ingest(day_idx):
     df["_source_file"] = f"snapshot_day{day_idx}.csv"
     return df
 
-
 def gold_aggregate(silver_current_state):
-    return (
-        silver_current_state.groupby(["customer_id", "machine_id"])
-        .agg(
-            avg_fuel_level=("fuel_level", "mean"),
-            avg_payload_t=("payload_weight_t", "mean"),
-            fault_events=("fault_code", lambda s: (s != "NONE").sum()),
-            total_readings=("reading_id", "count"),
-        )
-        .reset_index()
-    )
+    return silver_current_state.groupby(["customer_id", "machine_id"]).agg(
+        avg_fuel_level=("fuel_level", "mean"),
+        avg_payload_t=("payload_weight_t", "mean"),
+        fault_events=("fault_code", lambda s: (s != "NONE").sum()),
+        total_readings=("reading_id", "count"),
+    ).reset_index()
 
 
 def main():
@@ -75,11 +66,7 @@ def main():
         gold_df = gold_aggregate(merged_state)
         elapsed = time.time() - t0
 
-        reduction_pct = (
-            round((1 - incremental_volume / total_rows) * 100, 2)
-            if prior_state is not None
-            else None
-        )
+        reduction_pct = round((1 - incremental_volume / total_rows) * 100, 2) if prior_state is not None else None
 
         day_result = {
             "day": d,
@@ -100,30 +87,25 @@ def main():
         prior_state = merged_state
         timings.append(elapsed)
 
-    comparable = [
-        r for r in results if r["reprocessing_reduction_pct_vs_full_reload"] is not None
-    ]
+    comparable = [r for r in results if r["reprocessing_reduction_pct_vs_full_reload"] is not None]
     summary = {
         "days_measured": len(comparable),
-        "avg_reprocessing_reduction_pct": round(
-            sum(r["reprocessing_reduction_pct_vs_full_reload"] for r in comparable)
-            / len(comparable),
-            2,
-        ),
-        "min_reprocessing_reduction_pct": min(
-            r["reprocessing_reduction_pct_vs_full_reload"] for r in comparable
-        ),
-        "max_reprocessing_reduction_pct": max(
-            r["reprocessing_reduction_pct_vs_full_reload"] for r in comparable
-        ),
-        "peak_daily_record_volume": max(
-            r["total_rows_in_snapshot_file"] for r in results
-        ),
+        "avg_reprocessing_reduction_pct": round(sum(r["reprocessing_reduction_pct_vs_full_reload"] for r in comparable) / len(comparable), 2),
+        "min_reprocessing_reduction_pct": min(r["reprocessing_reduction_pct_vs_full_reload"] for r in comparable),
+        "max_reprocessing_reduction_pct": max(r["reprocessing_reduction_pct_vs_full_reload"] for r in comparable),
+        "peak_daily_record_volume": max(r["total_rows_in_snapshot_file"] for r in results),
         "avg_pipeline_runtime_seconds": round(sum(timings) / len(timings), 2),
     }
 
-    with open(OUT_DIR / "measured_results.json", "w") as f:
-        json.dump({"daily_results": results, "summary": summary}, f, indent=2)
+    with open(VALIDATION_DIR / "measured_results.json", "w") as f:
+        json.dump(
+            {
+                "daily_results": results,
+                "summary": summary,
+            },
+            f,
+            indent=2,
+        )
 
     print("\n=== SUMMARY ===")
     print(json.dumps(summary, indent=2))
