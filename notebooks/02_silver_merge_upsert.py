@@ -12,9 +12,9 @@
 dbutils.widgets.text("snapshot_day", "0", "Day index being processed")
 snapshot_day = dbutils.widgets.get("snapshot_day")
 
-BRONZE_PATH = "/FileStore/mining_telemetry/delta/bronze_telemetry"
-SILVER_PATH = "/FileStore/mining_telemetry/delta/silver_telemetry_current"
-RECON_PATH = "/FileStore/mining_telemetry/delta/reconciliation_log"
+BRONZE_TABLE = "workspace.default.inc_batch_bronze"
+SILVER_TABLE = "workspace.default.inc_batch_silver"
+RECON_TABLE = "workspace.default.inc_batch_reconciliation"
 
 # COMMAND ----------
 
@@ -22,7 +22,7 @@ from pyspark.sql import functions as F
 from delta.tables import DeltaTable
 
 bronze_df = (
-    spark.read.format("delta").load(BRONZE_PATH)
+    spark.table(BRONZE_TABLE)
     .filter(F.col("_source_file") == f"snapshot_day{snapshot_day}.csv")
 )
 
@@ -45,12 +45,12 @@ print(f"Data quality gate: {dq_dropped:,} rows dropped ({before_ct:,} -> {after_
 
 # COMMAND ----------
 
-if not DeltaTable.isDeltaTable(spark, SILVER_PATH):
+if not spark.catalog.tableExists(SILVER_TABLE):
     # First run: everything is new
-    silver_candidate.write.format("delta").mode("overwrite").save(SILVER_PATH)
+    silver_candidate.write.mode("overwrite").saveAsTable(SILVER_TABLE)
     new_ct, changed_ct, unchanged_ct = after_ct, 0, 0
 else:
-    silver_table = DeltaTable.forPath(spark, SILVER_PATH)
+    silver_table = DeltaTable.forName(spark, SILVER_TABLE)
     prior_df = silver_table.toDF().select(
         "reading_id", "fuel_level", "payload_weight_t", "fault_code"
     )
@@ -78,6 +78,8 @@ else:
     unchanged_ct = count_map.get("UNCHANGED", 0)
 
     to_merge = classified.filter(F.col("_change_type").isin("NEW", "CHANGED")).select("cur.*")
+    display(classified.groupBy("_change_type").count())
+    display(to_merge.limit(10))
 
     print(f"NEW: {new_ct:,} | CHANGED: {changed_ct:,} | UNCHANGED (skipped): {unchanged_ct:,}")
 
@@ -107,7 +109,7 @@ recon_row = spark.createDataFrame([{
     "run_ts": None,
 }]).withColumn("run_ts", F.current_timestamp())
 
-recon_row.write.format("delta").mode("append").save(RECON_PATH)
+recon_row.write.mode("append").saveAsTable(RECON_TABLE)
 
 print(f"Reprocessing reduction vs. full reload: {reduction_pct}%")
 dbutils.notebook.exit(str(reduction_pct))

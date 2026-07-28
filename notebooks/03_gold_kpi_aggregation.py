@@ -8,14 +8,14 @@
 
 # COMMAND ----------
 
-SILVER_PATH = "/FileStore/mining_telemetry/delta/silver_telemetry_current"
-GOLD_PATH = "/FileStore/mining_telemetry/delta/gold_machine_kpis"
+SILVER_TABLE = "workspace.default.inc_batch_silver"
+GOLD_TABLE = "workspace.default.inc_batch_gold"
 
 # COMMAND ----------
 
 from pyspark.sql import functions as F
 
-silver_df = spark.read.format("delta").load(SILVER_PATH).cache()
+silver_df = spark.table(SILVER_TABLE).cache()
 
 gold_df = (
     silver_df.groupBy("customer_id", "machine_id")
@@ -27,16 +27,18 @@ gold_df = (
     )
 )
 
-gold_df.write.format("delta").mode("overwrite").save(GOLD_PATH)
+gold_df.write.mode("overwrite").saveAsTable(GOLD_TABLE)
 
 # COMMAND ----------
 
 # MAGIC %sql
 # MAGIC -- Delta OPTIMIZE + ZORDER for faster point/range lookups on the Gold table
-# MAGIC OPTIMIZE delta.`/FileStore/mining_telemetry/delta/gold_machine_kpis`
+# MAGIC OPTIMIZE workspace.default.inc_batch_gold
 # MAGIC ZORDER BY (customer_id, machine_id)
 
 # COMMAND ----------
-
+gold_df.printSchema()
+display(gold_df.limit(10))
 print(f"Gold KPI rows: {gold_df.count():,}")
+
 display(gold_df.orderBy(F.desc("fault_events")).limit(20))

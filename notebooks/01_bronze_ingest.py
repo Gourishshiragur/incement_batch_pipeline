@@ -9,9 +9,10 @@
 dbutils.widgets.text("snapshot_day", "0", "Day index of snapshot file to ingest")
 snapshot_day = dbutils.widgets.get("snapshot_day")
 
-RAW_PATH = f"/FileStore/mining_telemetry/raw/snapshot_day{snapshot_day}.csv"
-BRONZE_PATH = "/FileStore/mining_telemetry/delta/bronze_telemetry"
-AUDIT_PATH = "/FileStore/mining_telemetry/delta/audit_ingestion_log"
+RAW_PATH = f"/Volumes/workspace/default/incremental_batch/raw/snapshot_day{snapshot_day}.csv"
+
+BRONZE_TABLE = "workspace.default.inc_batch_bronze"
+AUDIT_TABLE = "workspace.default.inc_batch_audit"
 
 # COMMAND ----------
 
@@ -35,6 +36,8 @@ raw_df = (
     .withColumn("_ingestion_ts", F.current_timestamp())
     .withColumn("_source_file", F.lit(f"snapshot_day{snapshot_day}.csv"))
 )
+display(raw_df.limit(10))
+raw_df.printSchema()
 
 record_count = raw_df.count()
 print(f"Bronze ingest: {record_count:,} rows read from snapshot_day{snapshot_day}.csv")
@@ -43,10 +46,10 @@ print(f"Bronze ingest: {record_count:,} rows read from snapshot_day{snapshot_day
 
 # Append to Bronze Delta table (append-only, raw fidelity preserved)
 (
-    raw_df.write.format("delta")
+    raw_df.write
     .mode("append")
     .option("mergeSchema", "true")
-    .save(BRONZE_PATH)
+    .saveAsTable(BRONZE_TABLE)
 )
 
 # COMMAND ----------
@@ -60,6 +63,6 @@ audit_row = spark.createDataFrame([{
     "status": "SUCCESS",
 }]).withColumn("ingestion_ts", F.current_timestamp())
 
-audit_row.write.format("delta").mode("append").save(AUDIT_PATH)
+audit_row.write.mode("append").saveAsTable(AUDIT_TABLE)
 
 dbutils.notebook.exit(str(record_count))
