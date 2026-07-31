@@ -1,0 +1,33 @@
+{
+    "pipeline_name": "incremental_batch_pipeline",
+    "load_type": "incremental",
+    "file_format": "csv",
+    "target_format": "delta",
+    "paths": {
+        "local": {
+            "raw": "data/raw",
+            "bronze": "data/bronze",
+            "silver": "data/silver",
+            "gold": "data/gold",
+            "audit": "data/audit",
+            "control": "data/control",
+            "reports": "data/reports",
+            "logs": "data/logs",
+            "reconciliation": "data/reconciliation",
+            "validation": "data/reports"
+        },
+        "databricks": {
+            "raw": "/Volumes/workspace/default/incremental_batch/raw",
+            "bronze": "workspace.default.inc_batch_bronze",
+            "silver": "workspace.default.inc_batch_silver",
+            "gold": "workspace.default.inc_batch_gold",
+            "audit_table": "workspace.default.inc_batch_audit",
+            "audit": "/Volumes/workspace/default/incremental_batch/audit",
+            "reports": "/Volumes/workspace/default/incremental_batch/reports",
+            "control": "/Volumes/workspace/default/incremental_batch/control",
+            "logs": "/Volumes/workspace/default/incremental_batch/logs",
+            "reconciliation_table": "workspace.default.inc_batch_reconciliation",
+            "validation": "/Volumes/workspace/default/incremental_batch/reports"
+        }
+    }
+}

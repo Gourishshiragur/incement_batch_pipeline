@@ -11,23 +11,31 @@ import json
 import time
 import pandas as pd
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from pipeline_core import silver_data_quality_gate, silver_change_detection, merge_upsert
+import os
+import sys
 
-from pathlib import Path
+PROJECT_ROOT = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..")
+)
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
-VALIDATION_DIR = PROJECT_ROOT / "validation"
+sys.path.insert(0, PROJECT_ROOT)
 
+from src.pipeline.pipeline_core import (
+    silver_data_quality_gate,
+    silver_change_detection,
+    merge_upsert,
+)
+DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+OUT_DIR = os.path.dirname(__file__)
 N_DAYS = 5
 
 
 def bronze_ingest(day_idx):
-    df = pd.read_csv(DATA_DIR / f"snapshot_day{day_idx}.csv")
+    df = pd.read_csv(f"{DATA_DIR}/snapshot_day{day_idx}.csv")
     df["_ingestion_ts"] = pd.Timestamp.now(tz="UTC").isoformat()
     df["_source_file"] = f"snapshot_day{day_idx}.csv"
     return df
+
 
 def gold_aggregate(silver_current_state):
     return silver_current_state.groupby(["customer_id", "machine_id"]).agg(
@@ -97,15 +105,8 @@ def main():
         "avg_pipeline_runtime_seconds": round(sum(timings) / len(timings), 2),
     }
 
-    with open(VALIDATION_DIR / "measured_results.json", "w") as f:
-        json.dump(
-            {
-                "daily_results": results,
-                "summary": summary,
-            },
-            f,
-            indent=2,
-        )
+    with open(f"{OUT_DIR}/measured_results.json", "w") as f:
+        json.dump({"daily_results": results, "summary": summary}, f, indent=2)
 
     print("\n=== SUMMARY ===")
     print(json.dumps(summary, indent=2))

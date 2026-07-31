@@ -8,13 +8,20 @@ with known expected outputs -- not on the generated dataset, so results are
 deterministic and don't depend on random seeds.
 """
 import sys
-import os
+from pathlib import Path
+
 import pandas as pd
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from pipeline_core import silver_change_detection, silver_data_quality_gate, merge_upsert, TRACKED_FIELDS
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.pipeline.pipeline_core import (
+    silver_change_detection,
+    silver_data_quality_gate,
+    merge_upsert,
+    TRACKED_FIELDS,
+)
 
 def make_df(rows):
     return pd.DataFrame(rows)

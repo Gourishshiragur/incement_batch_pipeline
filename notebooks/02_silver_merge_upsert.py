@@ -9,34 +9,96 @@
 
 # COMMAND ----------
 
-dbutils.widgets.text("snapshot_day", "0", "Day index being processed")
-snapshot_day = dbutils.widgets.get("snapshot_day")
+import os
+import sys
+from pathlib import Path
 
-BRONZE_TABLE = "workspace.default.inc_batch_bronze"
-SILVER_TABLE = "workspace.default.inc_batch_silver"
-RECON_TABLE = "workspace.default.inc_batch_reconciliation"
+from pyspark.sql import SparkSession
+
+from delta import configure_spark_with_delta_pip
+
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+
+from src.pipeline.pipeline_core_spark import (
+    silver_data_quality_gate,
+    silver_change_detection,
+    delta_merge,
+    
+)
+
+from utils.config_loader import get_paths
+
+IS_DATABRICKS = "DATABRICKS_RUNTIME_VERSION" in os.environ
+if not IS_DATABRICKS:
+    builder = (
+        SparkSession.builder
+        .master("local[*]")
+        .appName("IncrementalBatchPipeline")
+        .config(
+            "spark.sql.extensions",
+            "io.delta.sql.DeltaSparkSessionExtension"
+        )
+        .config(
+            "spark.sql.catalog.spark_catalog",
+            "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+        )
+    )
+
+    spark = configure_spark_with_delta_pip(builder).getOrCreate()
+
+if IS_DATABRICKS:
+    dbutils.widgets.text("snapshot_day", "0", "Day index being processed")
+    snapshot_day = dbutils.widgets.get("snapshot_day")
+else:
+    snapshot_day = sys.argv[1] if len(sys.argv) > 1 else "0"
+
+paths = get_paths()
+
+if IS_DATABRICKS:
+    BRONZE_TABLE = paths["bronze"]
+    SILVER_TABLE = paths["silver"]
+    RECON_TABLE = paths["reconciliation"]
+else:
+    BRONZE_PATH = paths["bronze"]
+    SILVER_PATH = paths["silver"]
+    RECON_PATH = paths["reconciliation"]
 
 # COMMAND ----------
 
 from pyspark.sql import functions as F
-from delta.tables import DeltaTable
-
-bronze_df = (
-    spark.table(BRONZE_TABLE)
-    .filter(F.col("_source_file") == f"snapshot_day{snapshot_day}.csv")
+from pyspark.sql import Row
+from pyspark.sql.types import (
+    StructType,
+    StructField,
+    LongType,
+    DoubleType,
 )
 
-# --- Data quality gate ---
+if IS_DATABRICKS:
+    bronze_df = (
+        spark.table(BRONZE_TABLE)
+        .filter(F.col("_source_file") == f"snapshot_day{snapshot_day}")
+    )
+else:
+    bronze_df = (
+        spark.read.format("delta")
+        .load(BRONZE_PATH)
+        .filter(F.col("_source_file") == f"snapshot_day{snapshot_day}.csv")
+    )
+silver_candidate, dq_dropped = silver_data_quality_gate(bronze_df)
 before_ct = bronze_df.count()
-silver_candidate = (
-    bronze_df
-    .dropna(subset=["customer_id", "machine_id", "reading_id"])
-    .filter((F.col("fuel_level").between(0, 100)) & (F.col("payload_weight_t").between(0, 60)))
-    .dropDuplicates(["reading_id"])
-)
 after_ct = silver_candidate.count()
-dq_dropped = before_ct - after_ct
-print(f"Data quality gate: {dq_dropped:,} rows dropped ({before_ct:,} -> {after_ct:,})")
+
+print(
+    f"Data quality gate: {dq_dropped:,} rows dropped "
+    f"({before_ct:,} -> {after_ct:,})"
+)
 
 # COMMAND ----------
 
@@ -45,71 +107,69 @@ print(f"Data quality gate: {dq_dropped:,} rows dropped ({before_ct:,} -> {after_
 
 # COMMAND ----------
 
-if not spark.catalog.tableExists(SILVER_TABLE):
-    # First run: everything is new
-    silver_candidate.write.mode("overwrite").saveAsTable(SILVER_TABLE)
-    new_ct, changed_ct, unchanged_ct = after_ct, 0, 0
-else:
-    silver_table = DeltaTable.forName(spark, SILVER_TABLE)
-    prior_df = silver_table.toDF().select(
-        "reading_id", "fuel_level", "payload_weight_t", "fault_code"
-    )
 
-    tracked = ["fuel_level", "payload_weight_t", "fault_code"]
-    joined = silver_candidate.alias("cur").join(
-        prior_df.alias("prior"), on="reading_id", how="left"
-    )
 
-    changed_expr = F.lit(False)
-    for f in tracked:
-        changed_expr = changed_expr | (F.col(f"cur.{f}") != F.col(f"prior.{f}"))
+silver_target = SILVER_TABLE if IS_DATABRICKS else SILVER_PATH
 
-    classified = joined.withColumn(
-        "_change_type",
-        F.when(F.col("prior.fuel_level").isNull(), "NEW")
-         .when(changed_expr, "CHANGED")
-         .otherwise("UNCHANGED"),
-    )
+to_merge, new_ct, changed_ct, unchanged_ct = silver_change_detection(
+    silver_candidate,
+    silver_target,
+    spark,
+)
 
-    counts = classified.groupBy("_change_type").count().collect()
-    count_map = {r["_change_type"]: r["count"] for r in counts}
-    new_ct = count_map.get("NEW", 0)
-    changed_ct = count_map.get("CHANGED", 0)
-    unchanged_ct = count_map.get("UNCHANGED", 0)
+print(
+    f"NEW: {new_ct:,} | "
+    f"CHANGED: {changed_ct:,} | "
+    f"UNCHANGED: {unchanged_ct:,}"
+)
 
-    to_merge = classified.filter(F.col("_change_type").isin("NEW", "CHANGED")).select("cur.*")
-    display(classified.groupBy("_change_type").count())
-    display(to_merge.limit(10))
-
-    print(f"NEW: {new_ct:,} | CHANGED: {changed_ct:,} | UNCHANGED (skipped): {unchanged_ct:,}")
-
-    # --- Real Delta Lake MERGE INTO upsert, keyed on reading_id ---
-    (
-        silver_table.alias("t")
-        .merge(to_merge.alias("s"), "t.reading_id = s.reading_id")
-        .whenMatchedUpdateAll()
-        .whenNotMatchedInsertAll()
-        .execute()
-    )
-
-# COMMAND ----------
-
+delta_merge(
+    spark,
+    to_merge,
+    silver_target,
+)
 incremental_volume = new_ct + changed_ct
 reduction_pct = round((1 - incremental_volume / before_ct) * 100, 2) if before_ct else None
 
-recon_row = spark.createDataFrame([{
-    "snapshot_day": int(snapshot_day),
-    "total_rows_in_snapshot": before_ct,
-    "new_rows": new_ct,
-    "changed_rows": changed_ct,
-    "unchanged_rows_skipped": unchanged_ct,
-    "incremental_volume_processed": incremental_volume,
-    "reprocessing_reduction_pct": reduction_pct,
-    "dq_dropped_rows": dq_dropped,
-    "run_ts": None,
-}]).withColumn("run_ts", F.current_timestamp())
+schema = StructType([
+    StructField("snapshot_day", LongType(), False),
+    StructField("total_rows_in_snapshot", LongType(), False),
+    StructField("new_rows", LongType(), False),
+    StructField("changed_rows", LongType(), False),
+    StructField("unchanged_rows_skipped", LongType(), False),
+    StructField("incremental_volume_processed", LongType(), False),
+    StructField("reprocessing_reduction_pct", DoubleType(), True),
+    StructField("dq_dropped_rows", LongType(), False),
+])
 
-recon_row.write.mode("append").saveAsTable(RECON_TABLE)
+recon_row = spark.createDataFrame(
+    [Row(
+        snapshot_day=int(snapshot_day),
+        total_rows_in_snapshot=int(before_ct),
+        new_rows=int(new_ct),
+        changed_rows=int(changed_ct),
+        unchanged_rows_skipped=int(unchanged_ct),
+        incremental_volume_processed=int(incremental_volume),
+        reprocessing_reduction_pct=float(reduction_pct) if reduction_pct is not None else None,
+        dq_dropped_rows=int(dq_dropped),
+    )],
+    schema=schema,
+).withColumn(
+    "run_ts",
+    F.current_timestamp()
+)
+if IS_DATABRICKS:
+    recon_row.write.mode("append").saveAsTable(RECON_TABLE)
+else:
+    (
+        recon_row.write
+        .mode("append")
+        .format("delta")
+        .save(RECON_PATH)
+    )
 
 print(f"Reprocessing reduction vs. full reload: {reduction_pct}%")
-dbutils.notebook.exit(str(reduction_pct))
+if IS_DATABRICKS:
+    dbutils.notebook.exit(str(reduction_pct))
+else:
+    print(f"Reprocessing reduction: {reduction_pct}%")
