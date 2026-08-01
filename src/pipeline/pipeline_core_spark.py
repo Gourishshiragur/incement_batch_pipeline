@@ -23,6 +23,7 @@ from delta.tables import DeltaTable
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
+    BooleanType,
     DoubleType,
     LongType,
     StringType,
@@ -30,6 +31,9 @@ from pyspark.sql.types import (
     StructType,
     TimestampType,
 )
+from src.framework.quarantine import QuarantineManager
+from src.framework.schema_history import SchemaHistory
+
 IS_DATABRICKS = "DATABRICKS_RUNTIME_VERSION" in os.environ
 # ── Schema ──────────────────────────────────────────────────────────────────
 
@@ -66,32 +70,78 @@ RECONCILIATION_SCHEMA = StructType([
 
 # ── Bronze ───────────────────────────────────────────────────────────────────
 
+REQUIRED_FIELDS = ["reading_id", "customer_id", "machine_id"]
+
+
 def bronze_processing(
     spark: SparkSession,
     raw_path: str,
     bronze_path: str,
     audit_path: str,
     snapshot_day: int,
+    pipeline_name: str,
+    schema_history: Optional[SchemaHistory] = None,
+    quarantine_manager: Optional[QuarantineManager] = None,
 ) -> Tuple[DataFrame, int]:
     """
-    Read a raw CSV snapshot, enforce schema, attach ingestion metadata,
-    and append to the Bronze Delta table.
-
-    Returns:
-        (bronze_df, record_count)
+    Read a raw CSV snapshot, attach ingestion metadata, and append to the
+    Bronze Delta table -- with no silent data loss on schema drift.
     """
-    raw_df = (
+    raw_df_actual = (
         spark.read
         .option("header", True)
-        .schema(RAW_SCHEMA)
+        .option("inferSchema", True)
         .csv(raw_path)
+    )
+    raw_total_count = raw_df_actual.count()
+
+    if schema_history is not None:
+        expected_schema = {f.name: f.dataType.simpleString() for f in RAW_SCHEMA.fields}
+        actual_schema = {f.name: f.dataType.simpleString() for f in raw_df_actual.schema.fields}
+        drift = schema_history.compare(expected_schema, actual_schema)
+        schema_history.save_schema(raw_df_actual, pipeline_name, "bronze")
+        if drift:
+            print(f"SCHEMA DRIFT at bronze (snapshot_day={snapshot_day}): {drift}")
+
+    casted_df = raw_df_actual
+    for field in RAW_SCHEMA.fields:
+        if field.name in raw_df_actual.columns:
+            casted_df = casted_df.withColumn(field.name, F.col(field.name).cast(field.dataType))
+        else:
+            casted_df = casted_df.withColumn(field.name, F.lit(None).cast(field.dataType))
+
+    required_null_condition = None
+    for col in REQUIRED_FIELDS:
+        cond = F.col(col).isNull()
+        required_null_condition = cond if required_null_condition is None else (required_null_condition | cond)
+
+    malformed_df = casted_df.filter(required_null_condition)
+    clean_raw_df = casted_df.filter(~required_null_condition)
+
+    malformed_count = malformed_df.count()
+    if malformed_count > 0:
+        if quarantine_manager is not None:
+            quarantine_manager.quarantine(
+                malformed_df,
+                reason="required_field_missing_or_uncastable",
+                stage="bronze",
+                pipeline_name=pipeline_name,
+            )
+        else:
+            print(
+                f"WARNING: {malformed_count} rows at bronze snapshot_day={snapshot_day} "
+                f"have a missing/uncastable required field and no quarantine_manager was "
+                f"provided -- these rows are being dropped with no audit trail."
+            )
+
+    raw_df = (
+        clean_raw_df
         .withColumn("_ingestion_ts", F.current_timestamp())
         .withColumn("_source_file",  F.lit(f"snapshot_day{snapshot_day}.csv"))
         .withColumn("_snapshot_day", F.lit(snapshot_day))
     )
 
     record_count = raw_df.count()
-    # Append-only Bronze: raw fidelity preserved, nothing dropped here
     if IS_DATABRICKS:
         (
             raw_df.write
@@ -107,65 +157,99 @@ def bronze_processing(
             .option("mergeSchema", "true")
             .save(bronze_path)
         )
-    # Audit log — every ingestion is traceable for replay / reconciliation
+
+   # Row conservation: every row read must end up either written to Bronze
+    # or quarantined -- nothing in between. Always True by construction here
+    # (required_null_condition is built purely from isNull() checks, which
+    # are never null themselves), but checked explicitly and logged so a
+    # future change to this logic can't silently reintroduce a gap.
+    conservation_ok = (raw_total_count == record_count + malformed_count)
+    if not conservation_ok:
+        print(
+            f"ROW CONSERVATION CHECK FAILED at bronze (snapshot_day={snapshot_day}): "
+            f"raw_total={raw_total_count}, written={record_count}, "
+            f"quarantined={malformed_count}, "
+            f"missing={raw_total_count - (record_count + malformed_count)}"
+        )
+    else:
+        print(f"Row conservation OK at bronze: {raw_total_count} = {record_count} written + {malformed_count} quarantined")
+
+    # Audit log — every ingestion is traceable for replay / reconciliation,
+    # including how many rows were quarantined for this snapshot.
     audit_row = spark.createDataFrame(
-        [(snapshot_day, f"snapshot_day{snapshot_day}.csv", record_count, None, "SUCCESS")],
+        [(snapshot_day, f"snapshot_day{snapshot_day}.csv", raw_total_count, record_count, malformed_count, conservation_ok, None, "SUCCESS")],
         schema=StructType([
-            StructField("snapshot_day",  LongType(),    nullable=False),
-            StructField("source_file",   StringType(),  nullable=False),
-            StructField("record_count",  LongType(),    nullable=False),
-            StructField("ingestion_ts",  TimestampType(),nullable=True),
-            StructField("status",        StringType(),  nullable=False),
+            StructField("snapshot_day",       LongType(),     nullable=False),
+            StructField("source_file",        StringType(),   nullable=False),
+            StructField("raw_total_count",    LongType(),     nullable=False),
+            StructField("record_count",       LongType(),     nullable=False),
+            StructField("quarantined_count",  LongType(),     nullable=False),
+            StructField("conservation_ok",    BooleanType(),  nullable=False),
+            StructField("ingestion_ts",       TimestampType(),nullable=True),
+            StructField("status",             StringType(),   nullable=False),
         ])
     ).withColumn("ingestion_ts", F.current_timestamp())
 
     if IS_DATABRICKS:
-        audit_row.write.mode("append").saveAsTable(audit_path)
+        audit_row.write.mode("append").option("mergeSchema", "true").saveAsTable(audit_path)
     else:
-        audit_row.write.format("delta").mode("append").save(audit_path)
-        
-     
-            
-    return raw_df, record_count
+        audit_row.write.format("delta").mode("append").option("mergeSchema", "true").save(audit_path)
 
+    return raw_df, record_count
 
 # ── Silver: DQ gate ──────────────────────────────────────────────────────────
 
 def silver_data_quality_gate(
     bronze_df: DataFrame,
+    pipeline_name: str,
+    quarantine_manager: Optional[QuarantineManager] = None,
 ) -> Tuple[DataFrame, int]:
     """
-    Drop rows that would corrupt the Silver layer:
-      - Null business keys (customer_id, machine_id, reading_id)
-      - Sensor readings outside valid physical ranges
-      - Duplicate reading_id (keep last-ingested)
-
-    Returns:
-        (clean_df, rows_dropped)
+    Separate rows that would corrupt the Silver layer, with no silent loss.
+    Return signature unchanged: (clean_df, rows_dropped).
     """
-    before_count = bronze_df.count()
-
-    clean_df = (
-        bronze_df
-        .dropna(subset=["customer_id", "machine_id", "reading_id"])
-        .filter(F.col("fuel_level").between(0, 100))
-        .filter(F.col("payload_weight_t").between(0, 60))
+    invalid_condition = (
+        F.col("customer_id").isNull()
+        | F.col("machine_id").isNull()
+        | F.col("reading_id").isNull()
+        | ~F.col("fuel_level").between(0, 100)
+         | F.col("payload_weight_t").isNull()
+        | ~F.col("payload_weight_t").between(0, 60)
     )
 
-    # Dedup on reading_id — keep the row with the latest ingestion timestamp
-    # (handles re-transmits where the source resends a corrected reading)
+    invalid_df = bronze_df.filter(invalid_condition)
+    passed_df = bronze_df.filter(~invalid_condition)
+
     window = (
         Window.partitionBy("reading_id")
         .orderBy(F.col("_ingestion_ts").desc())
     )
-    clean_df = (
-        clean_df
-        .withColumn("_rn", F.row_number().over(window))
-        .filter(F.col("_rn") == 1)
-        .drop("_rn")
-    )
+    ranked_df = passed_df.withColumn("_rn", F.row_number().over(window))
+    clean_df = ranked_df.filter(F.col("_rn") == 1).drop("_rn")
+    duplicate_df = ranked_df.filter(F.col("_rn") > 1).drop("_rn")
 
-    rows_dropped = before_count - clean_df.count()
+    invalid_count = invalid_df.count()
+    duplicate_count = duplicate_df.count()
+
+    if quarantine_manager is not None:
+        if invalid_count > 0:
+            quarantine_manager.quarantine(
+                invalid_df, reason="null_key_or_out_of_range_value",
+                stage="silver_dq_gate", pipeline_name=pipeline_name,
+            )
+        if duplicate_count > 0:
+            quarantine_manager.quarantine(
+                duplicate_df, reason="duplicate_reading_id_superseded",
+                stage="silver_dq_gate", pipeline_name=pipeline_name,
+            )
+    elif invalid_count > 0 or duplicate_count > 0:
+        print(
+            f"WARNING: {invalid_count} invalid + {duplicate_count} duplicate rows "
+            f"at silver DQ gate and no quarantine_manager was provided -- "
+            f"these rows are being dropped with no audit trail."
+        )
+
+    rows_dropped = invalid_count + duplicate_count
     return clean_df, rows_dropped
 
 
@@ -189,13 +273,20 @@ def silver_change_detection(
         (to_merge_df, new_count, changed_count, unchanged_count)
     """
     if not DeltaTable.isDeltaTable(spark, silver_path):
-        # First run: entire snapshot is new
-        to_merge = silver_candidate.withColumn("_change_type", F.lit("NEW"))
-        return to_merge, silver_candidate.count(), 0, 0
+        # First run: every row is new
+        to_merge = silver_candidate
+
+        return (
+        to_merge,
+        silver_candidate.count(),
+        0,
+        0,
+    )
 
     prior_df = (
         spark.read.format("delta").load(silver_path)
         .select(["reading_id"] + TRACKED_FIELDS)
+        .withColumn("_prior_exists", F.lit(True))
         .alias("prior")
     )
 
@@ -205,16 +296,18 @@ def silver_change_detection(
         .join(prior_df, on="reading_id", how="left")
     )
 
-    # Build change expression: any tracked field differs between cur and prior
+    # eqNullSafe treats null==null as equal and null-vs-value as a real
+    # difference -- plain != returns null (silently falls to UNCHANGED)
+    # whenever either side is null.
     change_expr = F.lit(False)
     for field in TRACKED_FIELDS:
         change_expr = change_expr | (
-            F.col(f"cur.{field}") != F.col(f"prior.{field}")
+            ~F.col(f"cur.{field}").eqNullSafe(F.col(f"prior.{field}"))
         )
 
     classified = joined.withColumn(
         "_change_type",
-        F.when(F.col("prior.fuel_level").isNull(), "NEW")
+        F.when(F.col("prior._prior_exists").isNull(), "NEW")
          .when(change_expr, "CHANGED")
          .otherwise("UNCHANGED"),
     ).select("cur.*", "_change_type")
@@ -313,14 +406,24 @@ def gold_processing(
             F.count("reading_id").alias("total_readings"),
             F.max("_ingestion_ts").alias("last_updated_ts"),
         )
+        .cache()
     )
+
+    gold_count = gold_df.count()
+
+    if gold_count == 0:
+        silver_df.unpersist()
+        gold_df.unpersist()
+        raise RuntimeError(
+            f"Gold aggregation produced 0 rows from silver_source={silver_source} "
+            f"-- refusing to overwrite Gold with an empty result."
+        )
 
     if IS_DATABRICKS:
          gold_df.write.mode("overwrite").saveAsTable(gold_target)
     else:
         gold_df.write.format("delta").mode("overwrite").save(gold_target)
 
-    # OPTIMIZE + ZORDER so BI tools can do fast point/range lookups
     if IS_DATABRICKS:
         spark.sql(f"""
         OPTIMIZE {gold_target}
@@ -328,8 +431,8 @@ def gold_processing(
     """)
     else:
         print("Skipping OPTIMIZE/ZORDER in local Spark.")
-    gold_count = gold_df.count()
     silver_df.unpersist()
+    gold_df.unpersist()
     return gold_df, gold_count
 
 

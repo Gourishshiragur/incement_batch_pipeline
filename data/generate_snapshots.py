@@ -14,6 +14,7 @@ Scale target: ~1.2-1.5M rows per daily snapshot, matching resume claim of
 import numpy as np
 import pandas as pd
 import os
+from pathlib import Path
 
 RNG = np.random.default_rng(42)
 
@@ -22,7 +23,8 @@ MACHINES_PER_CUSTOMER = (25, 55)   # random range per customer
 READINGS_PER_MACHINE_PER_DAY = 360  # ~ every 4 min over a 24h operating window
 N_DAYS = 5
 
-OUT_DIR = os.path.dirname(os.path.abspath(__file__))
+OUT_DIR = Path("data/raw")
+OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 FAULT_CODES = ["NONE"] * 20 + ["F101_LOW_FUEL", "F204_ENGINE_TEMP", "F310_HYDRAULIC",
                "F450_GPS_LOSS", "F512_PAYLOAD_OVERLOAD"]
@@ -71,7 +73,7 @@ def generate_day_readings(roster: pd.DataFrame, day_idx: int, start_reading_seq:
 
 def main():
     roster = build_machine_roster()
-    roster.to_csv(f"{OUT_DIR}/machine_roster.csv", index=False)
+    roster.to_csv(OUT_DIR / "machine_roster.csv", index=False)
     print(f"Roster: {len(roster)} machines across {N_CUSTOMERS} customers")
 
     seq = 0
@@ -112,7 +114,7 @@ def main():
 
             snapshot = pd.concat([carry, today_new], ignore_index=True)
 
-        snapshot.to_csv(f"{OUT_DIR}/snapshot_day{d}.csv", index=False)
+        snapshot.to_csv(OUT_DIR / f"snapshot_day{d}.csv", index=False)
         print(f"snapshot_day{d}.csv written: {len(snapshot):,} rows")
         prev_snapshot = snapshot
 

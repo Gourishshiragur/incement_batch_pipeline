@@ -16,7 +16,7 @@ from pathlib import Path
 from pyspark.sql import SparkSession
 
 from delta import configure_spark_with_delta_pip
-
+from delta.tables import DeltaTable
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -31,10 +31,22 @@ from src.pipeline.pipeline_core_spark import (
     delta_merge,
     
 )
+from src.framework.quarantine import QuarantineManager
 
-from utils.config_loader import get_paths
+from utils.config_loader import (
+    get_paths,
+    get_config,
+    get_metadata,
+    get_environment,
+    get_pipeline_name,
+)
 
-IS_DATABRICKS = "DATABRICKS_RUNTIME_VERSION" in os.environ
+config = get_config()
+metadata = get_metadata()
+paths = get_paths()
+environment = get_environment()
+
+IS_DATABRICKS = environment == "databricks"
 if not IS_DATABRICKS:
     builder = (
         SparkSession.builder
@@ -60,6 +72,8 @@ else:
 
 paths = get_paths()
 
+quarantine_manager = QuarantineManager(quarantine_path=paths["quarantine"])
+
 if IS_DATABRICKS:
     BRONZE_TABLE = paths["bronze"]
     SILVER_TABLE = paths["silver"]
@@ -78,8 +92,8 @@ from pyspark.sql.types import (
     StructField,
     LongType,
     DoubleType,
+    BooleanType,
 )
-
 if IS_DATABRICKS:
     bronze_df = (
         spark.table(BRONZE_TABLE)
@@ -91,9 +105,27 @@ else:
         .load(BRONZE_PATH)
         .filter(F.col("_source_file") == f"snapshot_day{snapshot_day}.csv")
     )
-silver_candidate, dq_dropped = silver_data_quality_gate(bronze_df)
+silver_candidate, dq_dropped = silver_data_quality_gate(
+    bronze_df,
+    pipeline_name=get_pipeline_name(),
+    quarantine_manager=quarantine_manager,
+)
 before_ct = bronze_df.count()
 after_ct = silver_candidate.count()
+
+conservation_ok = (before_ct == after_ct + dq_dropped)
+
+if not conservation_ok:
+    print(
+        f"ROW CONSERVATION CHECK FAILED at silver DQ gate: "
+        f"before={before_ct}, after={after_ct}, dq_dropped={dq_dropped}, "
+        f"missing={before_ct - (after_ct + dq_dropped)}"
+    )
+else:
+    print(
+        f"Row conservation OK at silver DQ gate: {before_ct:,} = "
+        f"{after_ct:,} clean + {dq_dropped:,} quarantined"
+    )
 
 print(
     f"Data quality gate: {dq_dropped:,} rows dropped "
@@ -123,6 +155,17 @@ print(
     f"UNCHANGED: {unchanged_ct:,}"
 )
 
+print("=" * 60)
+print("SOURCE COLUMNS")
+print(to_merge.columns)
+
+if DeltaTable.isDeltaTable(spark, silver_target):
+    print("=" * 60)
+    print("TARGET COLUMNS")
+    spark.read.format("delta").load(silver_target).printSchema()
+
+print("=" * 60)
+
 delta_merge(
     spark,
     to_merge,
@@ -140,6 +183,7 @@ schema = StructType([
     StructField("incremental_volume_processed", LongType(), False),
     StructField("reprocessing_reduction_pct", DoubleType(), True),
     StructField("dq_dropped_rows", LongType(), False),
+    StructField("row_conservation_passed", BooleanType(), False),
 ])
 
 recon_row = spark.createDataFrame(
@@ -152,6 +196,7 @@ recon_row = spark.createDataFrame(
         incremental_volume_processed=int(incremental_volume),
         reprocessing_reduction_pct=float(reduction_pct) if reduction_pct is not None else None,
         dq_dropped_rows=int(dq_dropped),
+        row_conservation_passed=bool(conservation_ok),
     )],
     schema=schema,
 ).withColumn(

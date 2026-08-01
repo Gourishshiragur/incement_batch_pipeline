@@ -7,14 +7,18 @@
         "raw": "data/raw",
         "bronze": "data/bronze",
         "silver": "data/silver",
-        "gold": "data/gold"
+        "gold": "data/gold",
+        "audit": "data/audit",
+        "control": "data/control",
+        "quarantine": "data/quarantine",
+        "schema_history": "data/schema_history",
+        "reconciliation": "data/reconciliation"
     },
     "stages": {
         "generate": "data/generate_snapshots.py",
         "bronze": "notebooks/01_bronze_ingest.py",
         "silver": "notebooks/02_silver_merge_upsert.py",
         "gold": "notebooks/03_gold_kpi_aggregation.py",
-        "reconciliation": "notebooks/04_reconciliation.py",
-        "validation": "notebooks/05_validation.py"
+        "validation": "notebooks/04_validation.py"
     }
 }

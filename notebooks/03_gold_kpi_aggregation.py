@@ -29,9 +29,19 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.pipeline.pipeline_core_spark import gold_processing
-from utils.config_loader import get_paths
+from utils.config_loader import (
+    get_paths,
+    get_environment,
+    get_config,
+    get_metadata,
+)
 
-IS_DATABRICKS = "DATABRICKS_RUNTIME_VERSION" in os.environ
+config = get_config()
+metadata = get_metadata()
+paths = get_paths()
+environment = get_environment()
+
+IS_DATABRICKS = environment == "databricks"
 
 if not IS_DATABRICKS:
     from delta import configure_spark_with_delta_pip
@@ -56,13 +66,8 @@ if not IS_DATABRICKS:
     spark = configure_spark_with_delta_pip(builder).getOrCreate()
 
 
-if IS_DATABRICKS:
-    SILVER_SOURCE = "workspace.default.inc_batch_silver"
-    GOLD_TARGET = "workspace.default.inc_batch_gold"
-else:
-    paths = get_paths()
-    SILVER_SOURCE = paths["silver"]
-    GOLD_TARGET = paths["gold"]
+SILVER_SOURCE = paths["silver"]
+GOLD_TARGET = paths["gold"]
 # COMMAND ----------
 
 print("=" * 80)

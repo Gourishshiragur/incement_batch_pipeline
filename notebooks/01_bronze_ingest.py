@@ -9,15 +9,30 @@
 import os
 import sys
 from pathlib import Path
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.pipeline.pipeline_core_spark import bronze_processing
-from utils.config_loader import get_paths
+from src.framework.quarantine import QuarantineManager
+from src.framework.schema_history import SchemaHistory
+from utils.config_loader import (
+    get_paths,
+    get_config,
+    get_metadata,
+    get_environment,
+    get_pipeline_name,
+)
 
-IS_DATABRICKS = "DATABRICKS_RUNTIME_VERSION" in os.environ
+config = get_config()
+metadata = get_metadata()
+paths = get_paths()
+print(paths)
+environment = get_environment()
+
+IS_DATABRICKS = environment == "databricks"
 
 if not IS_DATABRICKS:
     from delta import configure_spark_with_delta_pip
@@ -47,13 +62,9 @@ if IS_DATABRICKS:
 else:
     snapshot_day = sys.argv[1] if len(sys.argv) > 1 else "0"
 
-paths = get_paths()
 
 
-if IS_DATABRICKS:
-    RAW_PATH = f"{paths['raw']}/snapshot_day{snapshot_day}"
-else:
-    RAW_PATH = f"{paths['raw']}/snapshot_day{snapshot_day}.csv"
+RAW_PATH = f"{paths['raw']}/snapshot_day{snapshot_day}.csv"
 
 if IS_DATABRICKS:
     BRONZE_TABLE = paths["bronze"]
@@ -64,8 +75,14 @@ else:
 
 # COMMAND ----------
 
+
 bronze_target = BRONZE_TABLE if IS_DATABRICKS else BRONZE_PATH
 audit_target = AUDIT_TABLE if IS_DATABRICKS else AUDIT_PATH
+
+# quarantine/schema_history paths are Volume/filesystem paths in both
+# environments -- get_paths() already resolves the right one per env.
+quarantine_manager = QuarantineManager(quarantine_path=paths["quarantine"])
+schema_history = SchemaHistory(history_path=paths["schema_history"])
 
 try:
     bronze_df, record_count = bronze_processing(
@@ -74,6 +91,9 @@ try:
         bronze_path=bronze_target,
         audit_path=audit_target,
         snapshot_day=int(snapshot_day),
+        schema_history=schema_history,
+        quarantine_manager=quarantine_manager,
+        pipeline_name=get_pipeline_name(),
     )
 except Exception as exc:
     print(f"ERROR: Bronze ingestion failed.\n{exc}")

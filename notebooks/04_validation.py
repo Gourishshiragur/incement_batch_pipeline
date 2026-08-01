@@ -32,7 +32,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-print("PROJECT_ROOT:", PROJECT_ROOT)
 
 
 import json
@@ -42,10 +41,23 @@ from datetime import datetime
 from delta.tables import DeltaTable
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
-from utils.config_loader import get_paths
+from utils.config_loader import (
+    get_paths,
+    get_environment,
+    get_config,
+    get_metadata,
+)
+
 # ------------------------------------------------------------------
 
-IS_DATABRICKS = "DATABRICKS_RUNTIME_VERSION" in os.environ
+
+
+config = get_config()
+metadata = get_metadata()
+paths = get_paths()
+environment = get_environment()
+
+IS_DATABRICKS = environment == "databricks"
 
 if not IS_DATABRICKS:
 
@@ -69,19 +81,12 @@ if not IS_DATABRICKS:
 
 # ------------------------------------------------------------------
 
-if IS_DATABRICKS:
-    BRONZE_PATH = "workspace.default.inc_batch_bronze"
-    SILVER_PATH = "workspace.default.inc_batch_silver"
-    GOLD_PATH = "workspace.default.inc_batch_gold"
-    RECON_PATH = "workspace.default.inc_batch_reconciliation"
-else:
-    paths = get_paths()
-    BRONZE_PATH = paths["bronze"]
-    SILVER_PATH = paths["silver"]
-    GOLD_PATH = paths["gold"]
-    RECON_PATH = paths["reconciliation"]
+BRONZE_PATH = paths["bronze"]
+SILVER_PATH = paths["silver"]
+GOLD_PATH = paths["gold"]
+RECON_PATH = paths["reconciliation_table"] if IS_DATABRICKS else paths["reconciliation"]
 
-REPORT_DIR = "reports"
+REPORT_DIR = config["reports_directory"]
 
 os.makedirs(REPORT_DIR, exist_ok=True)
 
@@ -195,6 +200,9 @@ if validation["reconciliation_exists"]:
     validation["unchanged_rows"] = recon["unchanged_rows_skipped"]
     validation["incremental_volume"] = recon["incremental_volume_processed"]
     validation["reduction_pct"] = recon["reprocessing_reduction_pct"]
+    validation["row_conservation_passed"] = recon["row_conservation_passed"]
+    if not recon["row_conservation_passed"]:
+        errors.append("Row conservation check failed at silver DQ gate -- rows may have been lost.")
 # ------------------------------------------------------------------
 
 #if validation["audit_exists"]:

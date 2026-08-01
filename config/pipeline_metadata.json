@@ -11,6 +11,8 @@
             "gold": "data/gold",
             "audit": "data/audit",
             "control": "data/control",
+            "quarantine": "data/quarantine",
+            "schema_history": "data/schema_history",
             "reports": "data/reports",
             "logs": "data/logs",
             "reconciliation": "data/reconciliation",
@@ -25,6 +27,8 @@
             "audit": "/Volumes/workspace/default/incremental_batch/audit",
             "reports": "/Volumes/workspace/default/incremental_batch/reports",
             "control": "/Volumes/workspace/default/incremental_batch/control",
+            "quarantine": "/Volumes/workspace/default/incremental_batch/quarantine",
+            "schema_history": "/Volumes/workspace/default/incremental_batch/schema_history",
             "logs": "/Volumes/workspace/default/incremental_batch/logs",
             "reconciliation_table": "workspace.default.inc_batch_reconciliation",
             "validation": "/Volumes/workspace/default/incremental_batch/reports"

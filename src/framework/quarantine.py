@@ -77,6 +77,7 @@ class QuarantineManager:
             quarantine_df.write
             .format("delta")
             .mode("append")
+            .option("mergeSchema", "true")
             .save(self.quarantine_path)
         )
 

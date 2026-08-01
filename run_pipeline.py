@@ -35,40 +35,37 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+import shutil
+from utils.config_loader import (
+    get_config,
+    get_paths,
+    get_environment,
+)
 
 ROOT = Path(__file__).resolve().parent
 
-CONFIG_FILE = ROOT / "config" / "pipeline_config.json"
 
-REPORTS_DIR = ROOT / "reports"
-
-
-def load_config():
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-import shutil
-
-RAW_DIR = ROOT / "data" / "raw"
-
-
-def snapshots_exist() -> bool:
+def snapshots_exist(raw_dir: Path) -> bool:
     """
     Check whether the required snapshot files already exist.
     """
-    expected = [RAW_DIR / f"snapshot_day{i}.csv" for i in range(5)]
+    expected = [raw_dir / f"snapshot_day{i}.csv" for i in range(5)]
     return all(path.exists() for path in expected)
 
 
-def clean_snapshots():
+def clean_snapshots(raw_dir: Path):
     """
     Remove previously generated snapshots.
     """
-    if RAW_DIR.exists():
-        shutil.rmtree(RAW_DIR)
-    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    if raw_dir.exists():
+        shutil.rmtree(raw_dir)
 
-def run_script(script):
+    raw_dir.mkdir(parents=True, exist_ok=True)
+
+def run_script(
+    script: str,
+    *args: str,
+) -> float:
 
     script_path = ROOT / script
 
@@ -79,9 +76,10 @@ def run_script(script):
     start = time.time()
 
     result = subprocess.run(
-        [sys.executable, str(script_path)],
-        cwd=ROOT
-    )
+        [sys.executable, str(script_path), *args],
+        cwd=ROOT,
+        text=True,
+)
 
     elapsed = round(time.time() - start, 2)
 
@@ -111,7 +109,6 @@ def main():
             "bronze",
             "silver",
             "gold",
-            "reconciliation",
             "validation"
         ],
         default="bronze"
@@ -124,14 +121,21 @@ def main():
             "bronze",
             "silver",
             "gold",
-            "reconciliation",
             "validation"
         ]
     )
 
     args = parser.parse_args()
 
-    config = load_config()
+    config = get_config()
+    paths = get_paths()
+    environment = get_environment()
+    
+    is_databricks = environment == "databricks"
+
+    REPORTS_DIR = ROOT / config["reports_directory"]
+    
+    RAW_DIR = ROOT / paths["raw"]
 
     stages = config["stages"]
 
@@ -139,10 +143,7 @@ def main():
 
     if args.only:
 
-        if args.only == "generate":
-            execution.append(("generate", stages["generate"]))
-        else:
-            execution.append((args.only, stages[args.only]))
+        execution.append((args.only, stages[args.only]))
 
     else:
 
@@ -150,25 +151,36 @@ def main():
             "bronze",
             "silver",
             "gold",
-            "reconciliation",
             "validation"
         ]
 
-    if args.generate:
-            print("\n--generate specified. Regenerating snapshots...\n")
+        generate_required = False
 
-            clean_snapshots()
+        if args.generate:
+            if is_databricks:
+                print("\n--generate is not supported in Databricks.")
+                print("Please populate the landing path before running the pipeline.\n")
+            else:
+                print("\n--generate specified. Regenerating snapshots...\n")
+                clean_snapshots(RAW_DIR)
+                generate_required = True
+               
+        elif is_databricks:
+            print("\nRunning in Databricks.")
+            print("Skipping sample snapshot generation.")
+            print("Expecting input data in the configured landing path.\n")
+
+        elif not snapshots_exist(RAW_DIR):
+            print("\nNo snapshots found.")
+            print("Generating snapshots automatically...\n")
+            generate_required = True
+
+        else:
+            print("\nExisting snapshots detected.")
+            print("Skipping snapshot generation.\n")
+
+        if generate_required:
             execution.append(("generate", stages["generate"]))
-
-    elif not snapshots_exist():
-        print("\nNo snapshots found.")
-        print("Generating snapshots automatically...\n")
-
-        execution.append(("generate", stages["generate"]))
-
-    else:
-        print("\nExisting snapshots detected.")
-        print("Skipping snapshot generation.\n")
 
         start_index = order.index(args.start_from)
 
