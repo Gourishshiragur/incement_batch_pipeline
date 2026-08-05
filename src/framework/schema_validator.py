@@ -35,9 +35,7 @@ class SchemaValidator:
         actual_columns = set(df.columns)
 
         missing_columns = [
-            column
-            for column in expected_columns
-            if column not in actual_columns
+            column for column in expected_columns if column not in actual_columns
         ]
 
         return len(missing_columns) == 0, missing_columns
@@ -52,8 +50,7 @@ class SchemaValidator:
         """
 
         actual_schema = {
-            field.name: field.dataType.simpleString()
-            for field in df.schema.fields
+            field.name: field.dataType.simpleString() for field in df.schema.fields
         }
 
         mismatches = []
@@ -62,9 +59,7 @@ class SchemaValidator:
 
             if column not in actual_schema:
 
-                mismatches.append(
-                    f"Missing column: {column}"
-                )
+                mismatches.append(f"Missing column: {column}")
 
             elif actual_schema[column] != datatype:
 
@@ -84,10 +79,7 @@ class SchemaValidator:
         Return schema as dictionary.
         """
 
-        return {
-            field.name: field.dataType.simpleString()
-            for field in df.schema.fields
-        }
+        return {field.name: field.dataType.simpleString() for field in df.schema.fields}
 
     @staticmethod
     def compare_schema(
@@ -104,9 +96,7 @@ class SchemaValidator:
 
         differences = []
 
-        all_columns = sorted(
-            set(source.keys()) | set(target.keys())
-        )
+        all_columns = sorted(set(source.keys()) | set(target.keys()))
 
         for column in all_columns:
 

@@ -25,10 +25,10 @@ from .constants import (
     ENV_LOCAL,
 )
 
-
 # ============================================================
 # ID Helpers
 # ============================================================
+
 
 def generate_run_id() -> str:
     """Generate a unique run identifier."""
@@ -43,6 +43,7 @@ def generate_execution_id() -> str:
 # ============================================================
 # Time Helpers
 # ============================================================
+
 
 def utc_now() -> datetime:
     """Return current UTC timestamp."""
@@ -62,6 +63,7 @@ def elapsed_seconds(start_time: float) -> float:
 # ============================================================
 # Environment Helpers
 # ============================================================
+
 
 def detect_environment(
     spark: SparkSession | None = None,
@@ -89,11 +91,12 @@ def execution_engine() -> str:
 # Databricks Helpers
 # ============================================================
 
+
 def workspace_name(
     spark: SparkSession | None = None,
 ) -> str | None:
     """Return Databricks workspace URL if available."""
-    
+
     if spark is None:
         return None
 
@@ -107,10 +110,10 @@ def cluster_name(
     spark: SparkSession | None = None,
 ) -> str | None:
     """Return Databricks cluster name if available."""
-    
+
     if spark is None:
         return None
-    
+
     try:
         return spark.conf.get("spark.databricks.clusterUsageTags.clusterName")
     except Exception:
@@ -120,6 +123,7 @@ def cluster_name(
 # ============================================================
 # System Helpers
 # ============================================================
+
 
 def hostname() -> str:
     """Return machine hostname."""

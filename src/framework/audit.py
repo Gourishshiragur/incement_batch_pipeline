@@ -13,14 +13,19 @@ Supports:
 
 from __future__ import annotations
 from datetime import datetime
+from pyspark.sql import Row
+
+
 from typing import Any, Optional
+import json
+from .audit_schema import AUDIT_SCHEMA
 from .constants import (
     DEFAULT_FILES_PROCESSED,
     DEFAULT_RETRY_COUNT,
     STATUS_SUCCESS,
     STATUS_FAILED,
+    FRAMEWORK_VERSION,
 )
-
 from .utils import (
     cluster_name,
     detect_environment,
@@ -34,13 +39,8 @@ from .utils import (
     workspace_name,
 )
 
-from .constants import (
-    DEFAULT_FILES_PROCESSED,
-    DEFAULT_RETRY_COUNT,
-    STATUS_SUCCESS,
-    STATUS_FAILED,
-    FRAMEWORK_VERSION,
-)
+from pyspark.sql import SparkSession
+
 
 class AuditFramework:
     """
@@ -51,13 +51,17 @@ class AuditFramework:
 
     def __init__(
         self,
+        spark: SparkSession,
         pipeline_name: str,
         pipeline_type: str,
+        execution_mode: Optional[str] = None,
         job_name: Optional[str] = None,
         trigger_type: Optional[str] = None,
     ):
-        
+
         self.pipeline_name = pipeline_name
+
+        self.spark = spark
 
         self.pipeline_type = pipeline_type
 
@@ -65,26 +69,28 @@ class AuditFramework:
 
         self.trigger_type = trigger_type
 
+        self.execution_mode = execution_mode
+
         self.run_id = generate_run_id()
 
         self.execution_id = generate_execution_id()
 
-        self.environment = detect_environment()
-        
+        self.environment = detect_environment(self.spark)
+
         self.execution_engine = execution_engine()
 
-        self.workspace_name = workspace_name()
+        self.workspace_name = workspace_name(self.spark)
 
-        self.cluster_name = cluster_name()
+        self.cluster_name = cluster_name(self.spark)
 
         self.hostname = hostname()
 
         self.user_name = user_name()
-        
+
         self.started_at: Optional[datetime] = None
-        
+
         self.completed_at: Optional[datetime] = None
-        
+
         self.retry_count = DEFAULT_RETRY_COUNT
 
     ####################################################################
@@ -127,12 +133,11 @@ class AuditFramework:
         duration_seconds: float = 0.0,
         error_type: Optional[str] = None,
         error_message: Optional[str] = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """
         Build a single audit record.
         """
         return {
-
             # Run Information
             "run_id": self.run_id,
             "execution_id": self.execution_id,
@@ -140,44 +145,37 @@ class AuditFramework:
             "pipeline_type": self.pipeline_type,
             "stage": stage,
             "status": status,
-
             # Pipeline Information
-            "job_name": self.job_name,
-            "trigger_type": self.trigger_type,
+            "job_name": self.job_name or "",
+            "trigger_type": self.trigger_type or "",
+            "execution_mode": self.execution_mode or "",
             "retry_count": self.retry_count,
-
             # Data Statistics
             "rows_read": int(rows_read),
             "rows_written": int(rows_written),
             "rows_rejected": int(rows_rejected),
             "files_processed": int(files_processed),
-
             # Source / Target
-            "source_name": source_name,
-            "source_path": source_path,
-            "target_name": target_name,
-            "target_path": target_path,
-
+            "source_name": source_name or "",
+            "source_path": source_path or "",
+            "target_name": target_name or "",
+            "target_path": target_path or "",
             # Execution Context
-            "metadata": metadata or {},
-
+            "metadata": json.dumps(metadata or {}),
             # Environment
-            "environment": self.environment,
-            "execution_engine": self.execution_engine,
-            "workspace_name": self.workspace_name,
-            "cluster_name": self.cluster_name,
-            "hostname": self.hostname,
-            "user_name": self.user_name,
-
+            "environment": self.environment or "",
+            "execution_engine": self.execution_engine or "",
+            "workspace_name": self.workspace_name or "",
+            "cluster_name": self.cluster_name or "",
+            "hostname": self.hostname or "",
+            "user_name": self.user_name or "",
             # Performance
             "started_at": self.started_at,
             "completed_at": self.completed_at,
             "duration_seconds": float(duration_seconds),
-
             # Errors
-            "error_type": error_type,
-            "error_message": error_message,
-
+            "error_type": error_type or "",
+            "error_message": error_message or "",
             # Metadata
             "created_at": utc_now(),
             "framework_version": FRAMEWORK_VERSION,
@@ -203,7 +201,7 @@ class AuditFramework:
         duration_seconds: float = 0.0,
         error_type: Optional[str] = None,
         error_message: Optional[str] = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """
         Write one audit record.
         """
@@ -222,9 +220,8 @@ class AuditFramework:
             duration_seconds=duration_seconds,
             error_type=error_type,
             error_message=error_message,
-            
         )
-        
+
         return record
 
     def finish_run(
@@ -240,16 +237,12 @@ class AuditFramework:
         target_path: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
         timer_start: Optional[float] = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """
         Write SUCCESS audit record.
         """
-        duration = (
-            elapsed_seconds(timer_start)
-            if timer_start is not None
-            else 0.0
-        )
-        
+        duration = elapsed_seconds(timer_start) if timer_start is not None else 0.0
+
         self.completed_at = utc_now()
         return self.log_stage(
             stage=stage,
@@ -271,16 +264,12 @@ class AuditFramework:
         stage: str,
         exception: Exception,
         timer_start: Optional[float] = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """
         Write FAILED audit record.
         """
 
-        duration = (
-            elapsed_seconds(timer_start)
-            if timer_start is not None
-            else 0.0
-        )
+        duration = elapsed_seconds(timer_start) if timer_start is not None else 0.0
 
         self.completed_at = utc_now()
 
@@ -291,3 +280,28 @@ class AuditFramework:
             error_type=type(exception).__name__,
             error_message=str(exception),
         )
+
+    def write_record(
+        self,
+        audit_path: str,
+        record: dict[str, Any],
+        is_databricks: bool = False,
+    ) -> None:
+        """
+        Persist one audit record.
+        """
+
+        audit_df = self.spark.createDataFrame(
+            [Row(**record)],
+            schema=AUDIT_SCHEMA,
+        )
+
+        if is_databricks:
+            (audit_df.write.mode("append").saveAsTable(audit_path))
+        else:
+            (
+                audit_df.write.format("delta")
+                .option("mergeSchema", "true")
+                .mode("append")
+                .save(audit_path)
+            )

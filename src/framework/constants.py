@@ -26,6 +26,7 @@ ENV_DATABRICKS = "databricks"
 # ============================================================
 # Pipeline Status
 # ============================================================
+STATUS_SKIPPED = "SKIPPED"
 
 STATUS_STARTED = "STARTED"
 
@@ -74,6 +75,9 @@ STAGE_VALIDATION = "VALIDATION"
 STAGE_RECONCILIATION = "RECONCILIATION"
 
 STAGE_QUARANTINE = "QUARANTINE"
+STAGE_AUDIT = "AUDIT"
+
+STAGE_CONTROL = "CONTROL"
 
 # ============================================================
 # Default Values

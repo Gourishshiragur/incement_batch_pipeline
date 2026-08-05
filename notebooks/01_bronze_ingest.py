@@ -1,36 +1,61 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Bronze Layer — Raw Telemetry Ingestion
+# MAGIC # Bronze Layer — Landing Telemetry Ingestion
 # MAGIC Reads the daily snapshot CSV extract, appends ingestion metadata, and writes
 # MAGIC to a Delta Bronze table with schema enforcement + audit logging.
 
 # COMMAND ----------
 
-import os
+
 import sys
 from pathlib import Path
+import time
+import json
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+REPORT_DIR = PROJECT_ROOT / "reports"
+REPORT_DIR.mkdir(exist_ok=True)
+
+
+def write_stage_status(status: str, rows: int = 0):
+
+    with open(
+        REPORT_DIR / f"bronze_day{snapshot_day}_status.json",
+        "w",
+        encoding="utf-8",
+    ) as f:
+
+        json.dump(
+            {
+                "stage": "bronze",
+                "snapshot_day": int(snapshot_day),
+                "status": status,
+                "rows_written": rows,
+            },
+            f,
+            indent=4,
+        )
+
 
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.pipeline.pipeline_core_spark import bronze_processing
-from src.framework.quarantine import QuarantineManager
-from src.framework.schema_history import SchemaHistory
+
+from src.framework.context import FrameworkContext
 from utils.config_loader import (
     get_paths,
-    get_config,
-    get_metadata,
     get_environment,
     get_pipeline_name,
+    get_metadata,
 )
 
-config = get_config()
-metadata = get_metadata()
 paths = get_paths()
-print(paths)
 environment = get_environment()
+pipeline_name = get_pipeline_name()
+metadata = get_metadata()
+
 
 IS_DATABRICKS = environment == "databricks"
 
@@ -39,9 +64,8 @@ if not IS_DATABRICKS:
     from pyspark.sql import SparkSession
 
     builder = (
-        SparkSession.builder
-        .master("local[*]")
-        .appName("IncrementalBatchPipeline")
+        SparkSession.builder.master("local[*]")
+        .appName(pipeline_name)
         .config(
             "spark.sql.extensions",
             "io.delta.sql.DeltaSparkSessionExtension",
@@ -50,11 +74,24 @@ if not IS_DATABRICKS:
             "spark.sql.catalog.spark_catalog",
             "org.apache.spark.sql.delta.catalog.DeltaCatalog",
         )
-         .config("spark.hadoop.hadoop.native.lib", "false")
-         .config("spark.hadoop.io.native.lib.available", "false")
+        .config("spark.hadoop.hadoop.native.lib", "false")
+        .config("spark.hadoop.io.native.lib.available", "false")
     )
 
     spark = configure_spark_with_delta_pip(builder).getOrCreate()
+
+context = FrameworkContext(
+    spark=spark,
+    pipeline_name=pipeline_name,
+    pipeline_type=metadata["pipeline"]["type"],
+    control_path=paths["control"],
+    quarantine_path=paths["quarantine"],
+    schema_history_path=paths["schema_history"],
+    schema_changes_path=paths["schema_changes"],
+)
+
+
+context.logger.debug(f"Resolved paths: {paths}")
 
 if IS_DATABRICKS:
     dbutils.widgets.text("snapshot_day", "0", "Day index of snapshot file to ingest")
@@ -63,8 +100,41 @@ else:
     snapshot_day = sys.argv[1] if len(sys.argv) > 1 else "0"
 
 
+LANDING_PATH = f"{paths['landing']}/snapshot_day{snapshot_day}.csv"
+SOURCE_FILE = LANDING_PATH
 
-RAW_PATH = f"{paths['raw']}/snapshot_day{snapshot_day}.csv"
+context.logger.info(f"Checking source file : {SOURCE_FILE}")
+context.logger.info(f"Control table path   : {paths['control']}")
+
+context.logger.pipeline_started()
+context.audit.start_run()
+context.control.start_run(
+    pipeline_name=pipeline_name,
+    pipeline_type=metadata["pipeline"]["type"],
+    run_id=context.audit.get_run_id(),
+    source_file=SOURCE_FILE,
+)
+if context.control.already_processed(
+    pipeline_name,
+    SOURCE_FILE,
+):
+    context.logger.info(f"Skipping already processed source: {SOURCE_FILE}")
+
+    context.control.skip_run(
+        pipeline_name=pipeline_name,
+        run_id=context.audit.get_run_id(),
+        rows_read=0,
+        rows_written=0,
+        duration_seconds=0,
+    )
+
+    write_stage_status("SKIPPED", 0)
+
+    if IS_DATABRICKS:
+        dbutils.notebook.exit("SKIPPED")
+    else:
+        sys.exit(0)
+
 
 if IS_DATABRICKS:
     BRONZE_TABLE = paths["bronze"]
@@ -81,23 +151,57 @@ audit_target = AUDIT_TABLE if IS_DATABRICKS else AUDIT_PATH
 
 # quarantine/schema_history paths are Volume/filesystem paths in both
 # environments -- get_paths() already resolves the right one per env.
-quarantine_manager = QuarantineManager(quarantine_path=paths["quarantine"])
-schema_history = SchemaHistory(history_path=paths["schema_history"])
+
+
+timer_start = time.time()
 
 try:
-    bronze_df, record_count = bronze_processing(
-        spark=spark,
-        raw_path=RAW_PATH,
-        bronze_path=bronze_target,
-        audit_path=audit_target,
-        snapshot_day=int(snapshot_day),
-        schema_history=schema_history,
-        quarantine_manager=quarantine_manager,
-        pipeline_name=get_pipeline_name(),
+    bronze_df, record_count, landing_total_count, malformed_count, conservation_ok = (
+        bronze_processing(
+            spark=spark,
+            landing_path=LANDING_PATH,
+            bronze_path=bronze_target,
+            audit_path=audit_target,
+            snapshot_day=int(snapshot_day),
+            pipeline_name=pipeline_name,
+            schema_history=context.schema_history,
+            quarantine_manager=context.quarantine,
+        )
     )
 except Exception as exc:
-    print(f"ERROR: Bronze ingestion failed.\n{exc}")
+
+    failed_record = context.audit.fail_run(
+        stage="bronze",
+        exception=exc,
+        timer_start=timer_start,
+    )
+
+    context.audit.write_record(
+        audit_path=audit_target,
+        record=failed_record,
+        is_databricks=IS_DATABRICKS,
+    )
+    context.control.fail_run(
+        pipeline_name=pipeline_name,
+        run_id=context.audit.get_run_id(),
+    )
+
+    context.logger.pipeline_failed(str(exc))
+    context.logger.exception(f"Bronze ingestion failed: {exc}")
+    write_stage_status("FAILED", 0)
     raise
+
+context.logger.info(f"Landing rows          : {landing_total_count:,}")
+context.logger.info(f"Bronze rows       : {record_count:,}")
+context.logger.info(f"Quarantined rows  : {malformed_count:,}")
+
+
+if conservation_ok:
+    context.logger.info("Row conservation check passed.")
+else:
+    context.logger.warning("Row conservation check failed.")
+
+context.logger.info("Bronze Preview")
 
 if IS_DATABRICKS:
     display(bronze_df.limit(10))
@@ -106,23 +210,44 @@ else:
 
 bronze_df.printSchema()
 
-print("=" * 60)
-print("Bronze Preview")
-print(f"Rows Read : {record_count:,}")
-print("=" * 60)
 
-
-
+context.logger.info(f"Rows Read : {record_count:,}")
 
 
 # COMMAND ----------
 
 
+audit_record = context.audit.finish_run(
+    stage="bronze",
+    rows_read=landing_total_count,
+    rows_written=record_count,
+    rows_rejected=malformed_count,
+    source_path=LANDING_PATH,
+    target_path=bronze_target,
+    timer_start=timer_start,
+)
+
+context.audit.write_record(
+    audit_path=audit_target,
+    record=audit_record,
+    is_databricks=IS_DATABRICKS,
+)
+
+context.control.finish_run(
+    pipeline_name=pipeline_name,
+    run_id=context.audit.get_run_id(),
+    rows_read=landing_total_count,
+    rows_written=record_count,
+    duration_seconds=round(time.time() - timer_start),
+)
+context.logger.info("Control table updated.")
+context.logger.pipeline_completed()
+write_stage_status(
+    "PROCESSED",
+    record_count,
+)
 
 if IS_DATABRICKS:
     dbutils.notebook.exit(str(record_count))
 else:
-    print("=" * 60)
-    print("Bronze Ingestion Completed Successfully")
-    print(f"Rows Ingested : {record_count:,}")
-    print("=" * 60)
+    context.logger.info(f"Rows Ingested : {record_count:,}")

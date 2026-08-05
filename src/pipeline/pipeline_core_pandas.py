@@ -4,6 +4,7 @@ harness (validation/run_pipeline_validation.py) and the unit test suite
 (tests/test_pipeline_logic.py). This is the single source of truth for the
 Bronze->Silver change-detection->merge logic being tested.
 """
+
 import pandas as pd
 import numpy as np
 
@@ -43,7 +44,9 @@ def silver_change_detection(df: pd.DataFrame, prior_silver_df: pd.DataFrame = No
     for f in TRACKED_FIELDS:
         field_changed |= (merged[f] != merged[f"_prior_{f}"]) & ~is_new
 
-    change_type = np.select([is_new, field_changed], ["NEW", "CHANGED"], default="UNCHANGED")
+    change_type = np.select(
+        [is_new, field_changed], ["NEW", "CHANGED"], default="UNCHANGED"
+    )
     df["_change_type"] = change_type
     return df
 

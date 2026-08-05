@@ -1,18 +1,22 @@
 {
     "environment": "auto",
     "generate_snapshots": false,
+    "execution_mode": "batch",
     "stop_on_failure": true,
-    "reports_directory": "reports",
-    "paths": {
-        "raw": "data/raw",
+    "storage": {
+        "root": "data",
+        "landing": "data/landing",
         "bronze": "data/bronze",
         "silver": "data/silver",
-        "gold": "data/gold",
-        "audit": "data/audit",
-        "control": "data/control",
-        "quarantine": "data/quarantine",
-        "schema_history": "data/schema_history",
-        "reconciliation": "data/reconciliation"
+        "gold": "data/gold"
+    },
+    "reports_directory": "reports",
+    "audit": {
+        "enabled": true,
+        "save_reports": true
+    },
+    "validation": {
+        "enabled": true
     },
     "stages": {
         "generate": "data/generate_snapshots.py",

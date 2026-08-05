@@ -1,11 +1,24 @@
 {
-    "pipeline_name": "incremental_batch_pipeline",
-    "load_type": "incremental",
-    "file_format": "csv",
-    "target_format": "delta",
+    "pipeline": {
+        "name": "incremental_batch_pipeline",
+        "type": "incremental_batch",
+        "version": "1.0.0",
+        "description": "Enterprise Metadata-Driven Incremental Batch Pipeline"
+    },
+    "source": {
+        "format": "csv",
+        "options": {
+            "header": true,
+            "inferSchema": true,
+            "delimiter": ","
+        }
+    },
+    "target": {
+        "format": "delta"
+    },
     "paths": {
         "local": {
-            "raw": "data/raw",
+            "landing": "data/landing",
             "bronze": "data/bronze",
             "silver": "data/silver",
             "gold": "data/gold",
@@ -13,24 +26,30 @@
             "control": "data/control",
             "quarantine": "data/quarantine",
             "schema_history": "data/schema_history",
-            "reports": "data/reports",
+            "schema_changes": "data/schema_changes",
             "logs": "data/logs",
+            "reports": "data/reports",
             "reconciliation": "data/reconciliation",
             "validation": "data/reports"
         },
         "databricks": {
-            "raw": "/Volumes/workspace/default/incremental_batch/raw",
-            "bronze": "workspace.default.inc_batch_bronze",
-            "silver": "workspace.default.inc_batch_silver",
-            "gold": "workspace.default.inc_batch_gold",
-            "audit_table": "workspace.default.inc_batch_audit",
+            "catalog": "workspace",
+            "schema": "default",
+            "landing": "/Volumes/workspace/default/incremental_batch/landing",
+            "tables": {
+                "bronze": "inc_batch_bronze",
+                "silver": "inc_batch_silver",
+                "gold": "inc_batch_gold",
+                "audit": "inc_batch_audit",
+                "reconciliation": "inc_batch_reconciliation"
+            },
             "audit": "/Volumes/workspace/default/incremental_batch/audit",
-            "reports": "/Volumes/workspace/default/incremental_batch/reports",
             "control": "/Volumes/workspace/default/incremental_batch/control",
             "quarantine": "/Volumes/workspace/default/incremental_batch/quarantine",
             "schema_history": "/Volumes/workspace/default/incremental_batch/schema_history",
+            "schema_changes": "/Volumes/workspace/default/incremental_batch/schema_changes",
             "logs": "/Volumes/workspace/default/incremental_batch/logs",
-            "reconciliation_table": "workspace.default.inc_batch_reconciliation",
+            "reports": "/Volumes/workspace/default/incremental_batch/reports",
             "validation": "/Volumes/workspace/default/incremental_batch/reports"
         }
     }

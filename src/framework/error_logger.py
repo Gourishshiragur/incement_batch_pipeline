@@ -37,7 +37,7 @@ class ErrorLogger:
         exception: Exception,
         pipeline_name: Optional[str] = None,
         run_id: Optional[str] = None,
-    ) -> dict:
+    ) -> dict[str, str | None]:
         """
         Log an exception and return structured metadata.
         """
@@ -48,7 +48,13 @@ class ErrorLogger:
             "stage": stage,
             "error_type": type(exception).__name__,
             "error_message": str(exception),
-            "stack_trace": traceback.format_exc(),
+            "stack_trace": "".join(
+                traceback.format_exception(
+                    type(exception),
+                    exception,
+                    exception.__traceback__,
+                )
+            ),
         }
 
         self.logger.exception(

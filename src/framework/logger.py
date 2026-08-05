@@ -63,15 +63,22 @@ class PipelineLogger:
     def warning(self, message: str) -> None:
         self.logger.warning(message)
 
-    def error(self, message: str) -> None:
-        self.logger.error(message)
+    def error(
+        self,
+        message: str,
+        exc_info: bool = False,
+    ) -> None:
+        self.logger.error(
+            message,
+            exc_info=exc_info,
+        )
 
     def debug(self, message: str) -> None:
         self.logger.debug(message)
 
     def critical(self, message: str) -> None:
         self.logger.critical(message)
-        
+
     ####################################################################
     # Pipeline Lifecycle
     ####################################################################
@@ -84,16 +91,12 @@ class PipelineLogger:
 
     def pipeline_failed(
         self,
-            error: str | None = None,
+        error: str | None = None,
     ) -> None:
         if error:
-            self.error(
-                f"Pipeline '{self.pipeline_name}' failed: {error}"
-        )
+            self.error(f"Pipeline '{self.pipeline_name}' failed: {error}")
         else:
-            self.error(
-                f"Pipeline '{self.pipeline_name}' failed."
-        )
+            self.error(f"Pipeline '{self.pipeline_name}' failed.")
 
     ####################################################################
     # Stage Lifecycle
@@ -120,15 +123,15 @@ class PipelineLogger:
         if exception is None:
             self.logger.exception(message)
         else:
-            self.logger.exception(
-                f"{message}: {exception}"
-            )
-            
+            self.logger.exception(f"{message}: {exception}")
+
+
 def get_logger(name: str) -> logging.Logger:
     """
     Return a configured logger instance.
     """
     return PipelineLogger(name).logger
+
 
 __all__ = [
     "PipelineLogger",

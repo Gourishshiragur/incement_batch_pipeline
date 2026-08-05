@@ -13,12 +13,16 @@ def _metadata_path():
     return (
         "/Volumes/workspace/default/incremental_batch/config/pipeline_metadata.json"
         if is_databricks()
-        else Path(__file__).resolve().parent.parent / "config" / "pipeline_metadata.json"
+        else Path(__file__).resolve().parent.parent
+        / "config"
+        / "pipeline_metadata.json"
     )
+
 
 # Load metadata only once
 with open(_metadata_path(), "r") as f:
     METADATA = json.load(f)
+
 
 def _config_path():
     """Return pipeline configuration file path based on environment."""
@@ -31,8 +35,8 @@ def _config_path():
 
 with open(_config_path(), "r") as f:
     CONFIG = json.load(f)
- 
-    
+
+
 def get_environment():
     """Return current execution environment."""
     return "databricks" if is_databricks() else "local"
@@ -55,19 +59,19 @@ def get_metadata():
 
 def get_pipeline_name():
     """Return pipeline name."""
-    return METADATA["pipeline_name"]
+    return METADATA["pipeline"]["name"]
 
 
 def get_load_type():
     """Return configured load type."""
-    return METADATA["load_type"]
+    return METADATA["pipeline"]["type"]
 
 
 def get_file_format():
     """Return source file format."""
-    return METADATA["file_format"]
+    return METADATA["source"]["format"]
 
 
 def get_target_format():
     """Return target storage format."""
-    return METADATA["target_format"]
+    return METADATA["target"]["format"]

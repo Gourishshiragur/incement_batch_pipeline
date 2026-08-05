@@ -10,8 +10,6 @@ Reusable across:
 from __future__ import annotations
 
 
-
-
 class PipelineMetrics:
     """
     Collects reusable execution metrics for a pipeline run.
@@ -48,13 +46,11 @@ class PipelineMetrics:
         self.invalid_records = 0
 
         self.partitions_processed = 0
-        
+
         self.execution_time_seconds = 0.0
-        
-       
-            
+
         self.custom_metrics = {}
-        
+
     ####################################################################
     # Additional Metrics
     ####################################################################
@@ -67,10 +63,10 @@ class PipelineMetrics:
 
     def get_metric(self, name: str) -> int | float | None:
         return self.custom_metrics.get(name)
-    
+
     def clear_custom_metrics(self) -> None:
         self.custom_metrics.clear()
-    
+
     ####################################################################
     # Increment Methods
     ####################################################################
@@ -143,7 +139,7 @@ class PipelineMetrics:
         metrics.update(self.custom_metrics)
 
         return metrics
-    
+
     ####################################################################
     # Summary
     ####################################################################
@@ -155,3 +151,6 @@ class PipelineMetrics:
             f"Files Processed={self.files_processed}, "
             f"Execution Time={self.execution_time_seconds:.2f}s"
         )
+
+    def __repr__(self) -> str:
+        return f"PipelineMetrics({self.summary()})"
