@@ -8,32 +8,43 @@ def is_databricks():
     return "DATABRICKS_RUNTIME_VERSION" in os.environ
 
 
-def _metadata_path():
-    """Return metadata file path based on environment."""
-    return (
-        "/Volumes/workspace/default/incremental_batch/config/pipeline_metadata.json"
-        if is_databricks()
-        else Path(__file__).resolve().parent.parent
-        / "config"
-        / "pipeline_metadata.json"
-    )
+# Repository root (works for local development and Databricks Repos)
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
-# Load metadata only once
-with open(_metadata_path(), "r") as f:
+def _metadata_path() -> Path:
+    """Return the metadata configuration file path."""
+    return PROJECT_ROOT / "config" / "pipeline_metadata.json"
+
+
+def _config_path() -> Path:
+    """Return the pipeline configuration file path."""
+    return PROJECT_ROOT / "config" / "pipeline_config.json"
+
+
+# ---------------------------------------------------------------------
+# Load Metadata
+# ---------------------------------------------------------------------
+
+metadata_file = _metadata_path()
+
+if not metadata_file.exists():
+    raise FileNotFoundError(f"Metadata configuration file not found: {metadata_file}")
+
+with metadata_file.open("r", encoding="utf-8") as f:
     METADATA = json.load(f)
 
 
-def _config_path():
-    """Return pipeline configuration file path based on environment."""
-    return (
-        "/Volumes/workspace/default/incremental_batch/config/pipeline_config.json"
-        if is_databricks()
-        else Path(__file__).resolve().parent.parent / "config" / "pipeline_config.json"
-    )
+# ---------------------------------------------------------------------
+# Load Configuration
+# ---------------------------------------------------------------------
 
+config_file = _config_path()
 
-with open(_config_path(), "r") as f:
+if not config_file.exists():
+    raise FileNotFoundError(f"Pipeline configuration file not found: {config_file}")
+
+with config_file.open("r", encoding="utf-8") as f:
     CONFIG = json.load(f)
 
 
@@ -41,7 +52,6 @@ def get_environment():
     """
     Return configured execution environment.
     """
-
     env = CONFIG.get("environment", "auto")
 
     if env == "auto":
@@ -61,38 +71,38 @@ def get_base_path():
     """
     Return base storage path.
     """
-
     paths = get_paths()
 
     if get_environment() == "local":
         return paths["base_path"]
 
-    return f"/Volumes/{paths['catalog']}/{paths['schema']}/{paths['volume']}"
+    return (
+        f"/Volumes/" f"{paths['catalog']}/" f"{paths['schema']}/" f"{paths['volume']}"
+    )
 
 
 def get_storage_path(folder_name):
     """
-    Return fully qualified storage path for a folder.
+    Return fully qualified storage path for a configured folder.
     """
-
-    paths = get_paths()
-
-    base = get_base_path()
-
-    folder = paths["folders"].get(folder_name)
+    folder = get_paths()["folders"].get(folder_name)
 
     if folder is None:
         raise KeyError(f"Unknown storage folder: {folder_name}")
 
-    return f"{base}/{folder}"
+    return f"{get_base_path()}/{folder}"
 
 
 def get_table_name(table_name):
     """
     Return configured table name.
     """
+    tables = get_paths()["tables"]
 
-    return get_paths()["tables"][table_name]
+    if table_name not in tables:
+        raise KeyError(f"Unknown table: {table_name}")
+
+    return tables[table_name]
 
 
 def get_config():
