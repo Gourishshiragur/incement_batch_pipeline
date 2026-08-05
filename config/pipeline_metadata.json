@@ -1,9 +1,16 @@
 {
+    "metadata_version": "1.0.0",
     "pipeline": {
         "name": "incremental_batch_pipeline",
         "type": "incremental_batch",
         "version": "1.0.0",
         "description": "Enterprise Metadata-Driven Incremental Batch Pipeline"
+    },
+    "environment": {
+        "supported": [
+            "local",
+            "databricks"
+        ]
     },
     "source": {
         "format": "csv",
@@ -18,39 +25,53 @@
     },
     "paths": {
         "local": {
-            "landing": "data/landing",
-            "bronze": "data/bronze",
-            "silver": "data/silver",
-            "gold": "data/gold",
-            "audit": "data/audit",
-            "control": "data/control",
-            "quarantine": "data/quarantine",
-            "schema_history": "data/schema_history",
-            "schema_changes": "data/schema_changes",
-            "logs": "data/logs",
-            "reports": "data/reports",
-            "reconciliation": "data/reconciliation",
-            "validation": "data/reports"
+            "base_path": "data",
+            "folders": {
+                "landing": "landing",
+                "bronze": "bronze",
+                "silver": "silver",
+                "gold": "gold",
+                "audit": "audit",
+                "control": "control",
+                "quarantine": "quarantine",
+                "schema_history": "schema_history",
+                "schema_changes": "schema_changes",
+                "logs": "logs",
+                "reports": "reports",
+                "reconciliation": "reconciliation",
+                "validation": "reports"
+            }
         },
         "databricks": {
             "catalog": "workspace",
             "schema": "default",
-            "landing": "/Volumes/workspace/default/incremental_batch/landing",
+            "volume": "incremental_batch",
+            "folders": {
+                "landing": "landing",
+                "bronze": "bronze",
+                "silver": "silver",
+                "gold": "gold",
+                "audit": "audit",
+                "control": "control",
+                "quarantine": "quarantine",
+                "schema_history": "schema_history",
+                "schema_changes": "schema_changes",
+                "logs": "logs",
+                "reports": "reports",
+                "reconciliation": "reconciliation",
+                "validation": "reports"
+            },
             "tables": {
                 "bronze": "inc_batch_bronze",
                 "silver": "inc_batch_silver",
                 "gold": "inc_batch_gold",
                 "audit": "inc_batch_audit",
+                "control": "inc_batch_control",
                 "reconciliation": "inc_batch_reconciliation"
             },
-            "audit": "/Volumes/workspace/default/incremental_batch/audit",
-            "control": "/Volumes/workspace/default/incremental_batch/control",
-            "quarantine": "/Volumes/workspace/default/incremental_batch/quarantine",
-            "schema_history": "/Volumes/workspace/default/incremental_batch/schema_history",
-            "schema_changes": "/Volumes/workspace/default/incremental_batch/schema_changes",
-            "logs": "/Volumes/workspace/default/incremental_batch/logs",
-            "reports": "/Volumes/workspace/default/incremental_batch/reports",
-            "validation": "/Volumes/workspace/default/incremental_batch/reports"
+            "storage": {
+                "type": "unity_catalog_volume"
+            }
         }
     }
 }

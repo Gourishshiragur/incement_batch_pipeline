@@ -38,13 +38,61 @@ with open(_config_path(), "r") as f:
 
 
 def get_environment():
-    """Return current execution environment."""
-    return "databricks" if is_databricks() else "local"
+    """
+    Return configured execution environment.
+    """
+
+    env = CONFIG.get("environment", "auto")
+
+    if env == "auto":
+        return "databricks" if is_databricks() else "local"
+
+    return env
 
 
 def get_paths():
-    """Return storage paths for the active environment."""
+    """
+    Return storage metadata for the active environment.
+    """
     return METADATA["paths"][get_environment()]
+
+
+def get_base_path():
+    """
+    Return base storage path.
+    """
+
+    paths = get_paths()
+
+    if get_environment() == "local":
+        return paths["base_path"]
+
+    return f"/Volumes/{paths['catalog']}/{paths['schema']}/{paths['volume']}"
+
+
+def get_storage_path(folder_name):
+    """
+    Return fully qualified storage path for a folder.
+    """
+
+    paths = get_paths()
+
+    base = get_base_path()
+
+    folder = paths["folders"].get(folder_name)
+
+    if folder is None:
+        raise KeyError(f"Unknown storage folder: {folder_name}")
+
+    return f"{base}/{folder}"
+
+
+def get_table_name(table_name):
+    """
+    Return configured table name.
+    """
+
+    return get_paths()["tables"][table_name]
 
 
 def get_config():
