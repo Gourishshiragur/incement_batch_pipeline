@@ -10,9 +10,10 @@ Reusable across:
 from __future__ import annotations
 
 import traceback
-from typing import Optional
+
 
 from .logger import PipelineLogger
+from typing import Any
 
 
 class ErrorLogger:
@@ -35,9 +36,9 @@ class ErrorLogger:
         self,
         stage: str,
         exception: Exception,
-        pipeline_name: Optional[str] = None,
-        run_id: Optional[str] = None,
-    ) -> dict[str, str | None]:
+        pipeline_name: str | None = None,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
         """
         Log an exception and return structured metadata.
         """

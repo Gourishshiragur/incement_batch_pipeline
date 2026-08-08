@@ -10,8 +10,6 @@ Stores invalid records for later analysis.
 """
 
 from __future__ import annotations
-
-from typing import Optional
 from delta.tables import DeltaTable
 
 from pyspark.sql import SparkSession, DataFrame
@@ -40,8 +38,8 @@ class QuarantineManager:
         error_code: str,
         error_message: str,
         stage: str,
-        batch_id: Optional[str] = None,
-        pipeline_name: Optional[str] = None,
+        batch_id: str | None = None,
+        pipeline_name: str | None = None,
     ) -> int:
         """
         Write invalid records into quarantine storage.
@@ -112,12 +110,9 @@ class QuarantineManager:
 
         (empty_df.write.format("delta").mode("overwrite").save(self.quarantine_path))
 
-    def exists(self) -> bool:
+    def exists(self, spark: SparkSession) -> bool:
         """
-        Placeholder for future implementation.
-
-        Can later verify whether the
-        quarantine location exists.
+        Return True if the quarantine Delta table exists.
         """
 
-        return True
+        return DeltaTable.isDeltaTable(spark, self.quarantine_path)

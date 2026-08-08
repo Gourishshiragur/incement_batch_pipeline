@@ -387,12 +387,21 @@ def delta_merge(
 
     Idempotent: running the same to_merge twice converges to the same state.
     """
-    if not DeltaTable.isDeltaTable(spark, silver_path):
-        # First run: no existing table — write directly
-        to_merge.write.format("delta").mode("overwrite").save(silver_path)
+    if IS_DATABRICKS:
+
+        if not spark.catalog.tableExists(silver_path):
+            to_merge.write.mode("overwrite").saveAsTable(silver_path)
         return
 
-    silver_table = DeltaTable.forPath(spark, silver_path)
+        silver_table = DeltaTable.forName(spark, silver_path)
+
+    else:
+
+        if not DeltaTable.isDeltaTable(spark, silver_path):
+            to_merge.write.format("delta").mode("overwrite").save(silver_path)
+            return
+
+        silver_table = DeltaTable.forPath(spark, silver_path)
 
     (
         silver_table.alias("target")
@@ -529,6 +538,9 @@ def reconciliation(
         schema=RECONCILIATION_SCHEMA,
     ).withColumn("run_ts", F.current_timestamp())
 
-    recon_row.write.format("delta").mode("append").save(recon_path)
+    if IS_DATABRICKS:
+        (recon_row.write.mode("append").saveAsTable(recon_path))
+    else:
+        (recon_row.write.format("delta").mode("append").save(recon_path))
 
     return reduction_pct

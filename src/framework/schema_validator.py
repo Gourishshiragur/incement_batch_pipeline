@@ -111,3 +111,14 @@ class SchemaValidator:
                 )
 
         return len(differences) == 0, differences
+
+    @staticmethod
+    def schema_exists(
+        df: DataFrame,
+        column: str,
+    ) -> bool:
+        """
+        Check whether a column exists.
+        """
+
+        return column in df.columns

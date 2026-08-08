@@ -25,6 +25,7 @@ AUDIT_SCHEMA = StructType(
         ####################################################################
         StructField("run_id", StringType(), False),
         StructField("execution_id", StringType(), False),
+        StructField("batch_id", StringType(), True),
         StructField("pipeline_name", StringType(), False),
         StructField("pipeline_type", StringType(), False),
         StructField("stage", StringType(), False),
@@ -42,12 +43,15 @@ AUDIT_SCHEMA = StructType(
         StructField("rows_read", IntegerType(), False),
         StructField("rows_written", IntegerType(), False),
         StructField("rows_rejected", IntegerType(), False),
+        StructField("rows_skipped", IntegerType(), False),
         StructField("files_processed", IntegerType(), False),
+        StructField("snapshot_day", IntegerType(), True),
         ####################################################################
         # Source / Target
         ####################################################################
         StructField("source_name", StringType(), True),
         StructField("source_path", StringType(), True),
+        StructField("source_file", StringType(), True),
         StructField("target_name", StringType(), True),
         StructField("target_path", StringType(), True),
         ####################################################################
@@ -83,5 +87,6 @@ AUDIT_SCHEMA = StructType(
         ####################################################################
         StructField("created_at", TimestampType(), False),
         StructField("framework_version", StringType(), False),
+        StructField("schema_version", StringType(), False),
     ]
 )

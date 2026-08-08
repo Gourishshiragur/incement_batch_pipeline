@@ -9,28 +9,18 @@
 
 # COMMAND ----------
 
+import os
 import sys
 from pathlib import Path
 import time
 
-from pyspark.sql import SparkSession
+# Local only: add project root for imports
+if not os.getenv("DATABRICKS_RUNTIME_VERSION"):
+    PROJECT_ROOT = Path.cwd()
 
-from delta import configure_spark_with_delta_pip
-from delta.tables import DeltaTable
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-
-from src.pipeline.pipeline_core_spark import (
-    silver_data_quality_gate,
-    silver_change_detection,
-    delta_merge,
-)
-
-from src.framework.context import FrameworkContext
 from utils.config_loader import (
     get_paths,
     get_config,
@@ -38,8 +28,32 @@ from utils.config_loader import (
     get_environment,
     get_pipeline_name,
 )
+
+from pyspark.sql import SparkSession
+from delta import configure_spark_with_delta_pip
+from delta.tables import DeltaTable
+
+# Load configuration FIRST
+paths = get_paths()
+config = get_config()
+metadata = get_metadata()
+environment = get_environment()
+pipeline_name = get_pipeline_name()
+
+# Now it is safe
+IS_DATABRICKS = environment == "databricks"
+
+
+# Project imports
+from src.pipeline.pipeline_core_spark import (
+    silver_data_quality_gate,
+    silver_change_detection,
+    delta_merge,
+)
+
+from src.framework.context import FrameworkContext
+
 from pyspark.sql import functions as F
-from pyspark.sql import Row
 from pyspark.sql.types import (
     StructType,
     StructField,
@@ -48,21 +62,13 @@ from pyspark.sql.types import (
     DoubleType,
     BooleanType,
 )
+
 from src.framework.constants import (
     STATUS_SUCCESS,
     STATUS_SKIPPED,
     STATUS_FAILED,
     STATUS_STARTED,
 )
-
-paths = get_paths()
-config = get_config()
-metadata = get_metadata()
-environment = get_environment()
-pipeline_name = get_pipeline_name()
-
-IS_DATABRICKS = environment == "databricks"
-
 
 if not IS_DATABRICKS:
     builder = (
@@ -79,40 +85,52 @@ if not IS_DATABRICKS:
 
 if IS_DATABRICKS:
     dbutils.widgets.text("snapshot_day", "0", "Day index being processed")
+    dbutils.widgets.text("run_id", "")
+    dbutils.widgets.text("execution_id", "")
+
     snapshot_day = dbutils.widgets.get("snapshot_day")
+    shared_run_id = dbutils.widgets.get("run_id") or None
+    shared_execution_id = dbutils.widgets.get("execution_id") or None
+
 else:
     snapshot_day = sys.argv[1] if len(sys.argv) > 1 else "0"
+    shared_run_id = sys.argv[2] if len(sys.argv) > 2 else None
+    shared_execution_id = sys.argv[3] if len(sys.argv) > 3 else None
 
-
+pipeline_type = metadata.get("pipeline", {}).get("type", "batch")
 context = FrameworkContext(
     spark=spark,
     pipeline_name=pipeline_name,
-    pipeline_type=metadata["pipeline"]["type"],
+    pipeline_type=pipeline_type,
     control_path=paths["control"],
     quarantine_path=paths["quarantine"],
     schema_history_path=paths["schema_history"],
     schema_changes_path=paths["schema_changes"],
+    run_id=shared_run_id,
+    execution_id=shared_execution_id,
 )
 
 context.logger.pipeline_started()
-context.audit.start_run()
-context.control.start_run(
-    pipeline_name=pipeline_name,
-    pipeline_type=metadata["pipeline"]["type"],
-    run_id=context.audit.get_run_id(),
-)
 
+run_id = context.audit.start_run()
+
+LANDING_PATH = f"{paths['landing']}/snapshot_day{snapshot_day}.csv"
+SOURCE_FILE = Path(LANDING_PATH).name
 previous_status = context.control.last_stage_status(
     pipeline_name=pipeline_name,
-    source_file=f"{paths['landing']}/snapshot_day{snapshot_day}.csv",
+    source_file=SOURCE_FILE,
+    stage="bronze",
 )
 
-if previous_status == STATUS_SKIPPED:
+if previous_status == STATUS_SUCCESS:
+    pass
+
+elif previous_status == STATUS_SKIPPED:
     context.logger.info("Bronze stage skipped. Skipping Silver.")
 
     context.control.skip_run(
         pipeline_name=pipeline_name,
-        run_id=context.audit.get_run_id(),
+        run_id=run_id,
     )
 
     if IS_DATABRICKS:
@@ -124,7 +142,7 @@ elif previous_status == STATUS_FAILED:
 
     context.control.fail_run(
         pipeline_name=pipeline_name,
-        run_id=context.audit.get_run_id(),
+        run_id=run_id,
         error_message="Bronze stage failed.",
     )
 
@@ -135,11 +153,48 @@ elif previous_status == STATUS_STARTED:
 
     context.control.fail_run(
         pipeline_name=pipeline_name,
-        run_id=context.audit.get_run_id(),
+        run_id=run_id,
         error_message="Bronze stage did not complete.",
     )
 
     raise RuntimeError("Bronze stage did not complete.")
+else:
+    context.control.fail_run(
+        pipeline_name=pipeline_name,
+        run_id=run_id,
+        error_message=f"Unexpected Bronze status: {previous_status}",
+    )
+
+    raise RuntimeError(f"Unexpected Bronze status: {previous_status}")
+
+# Skip if Silver has already successfully processed this exact source file --
+# without this check (and without the stage= filter on already_processed),
+# Silver would reprocess and re-MERGE on every run for the same day.
+if context.control.already_processed(
+    pipeline_name,
+    SOURCE_FILE,
+    stage="silver",
+):
+    context.logger.info(f"Silver already processed for: {SOURCE_FILE}")
+
+    context.control.skip_run(
+        pipeline_name=pipeline_name,
+        run_id=run_id,
+    )
+
+    if IS_DATABRICKS:
+        dbutils.notebook.exit("SKIPPED")
+    else:
+        sys.exit(0)
+
+context.control.start_run(
+    pipeline_name=pipeline_name,
+    pipeline_type=pipeline_type,
+    run_id=run_id,
+    execution_id=context.audit.get_execution_id(),
+    stage="silver",
+    source_file=SOURCE_FILE,
+)
 context.logger.debug(f"Resolved paths: {paths}")
 
 
@@ -166,13 +221,13 @@ try:
 
     if IS_DATABRICKS:
         bronze_df = spark.table(BRONZE_TABLE).filter(
-            F.col("_source_file") == f"snapshot_day{snapshot_day}"
+            F.col("_source_file") == SOURCE_FILE
         )
     else:
         bronze_df = (
             spark.read.format("delta")
             .load(BRONZE_PATH)
-            .filter(F.col("_source_file") == f"snapshot_day{snapshot_day}.csv")
+            .filter(F.col("_source_file") == SOURCE_FILE)
         )
 
     silver_candidate, dq_dropped = silver_data_quality_gate(
@@ -204,12 +259,33 @@ try:
     )
 
     if new_ct == 0 and changed_ct == 0:
+        audit_record = context.audit.finish_run(
+            stage="silver",
+            rows_read=before_ct,
+            rows_written=0,
+            rows_rejected=dq_dropped,
+            source_path=BRONZE_TABLE if IS_DATABRICKS else BRONZE_PATH,
+            target_path=silver_target,
+            metadata={
+                "new_rows": 0,
+                "changed_rows": 0,
+                "unchanged_rows": int(unchanged_ct),
+                "reprocessing_reduction_pct": 100.0,
+            },
+            timer_start=timer_start,
+        )
+
+        context.audit.write_record(
+            audit_path=audit_target,
+            record=audit_record,
+            is_databricks=IS_DATABRICKS,
+        )
 
         context.logger.info("No business changes detected.")
 
         context.control.finish_run(
             pipeline_name=pipeline_name,
-            run_id=context.audit.get_run_id(),
+            run_id=run_id,
             rows_read=before_ct,
             rows_written=0,
             duration_seconds=round(time.time() - timer_start),
@@ -271,20 +347,20 @@ try:
 
     recon_row = spark.createDataFrame(
         [
-            Row(
-                run_id=context.audit.get_run_id(),
-                snapshot_day=int(snapshot_day),
-                total_rows_in_snapshot=int(before_ct),
-                new_rows=int(new_ct),
-                changed_rows=int(changed_ct),
-                unchanged_rows_skipped=int(unchanged_ct),
-                incremental_volume_processed=int(incremental_volume),
-                reprocessing_reduction_pct=(
+            {
+                "run_id": run_id,
+                "snapshot_day": int(snapshot_day),
+                "total_rows_in_snapshot": int(before_ct),
+                "new_rows": int(new_ct),
+                "changed_rows": int(changed_ct),
+                "unchanged_rows_skipped": int(unchanged_ct),
+                "incremental_volume_processed": int(incremental_volume),
+                "reprocessing_reduction_pct": (
                     float(reduction_pct) if reduction_pct is not None else None
                 ),
-                dq_dropped_rows=int(dq_dropped),
-                row_conservation_passed=bool(conservation_ok),
-            )
+                "dq_dropped_rows": int(dq_dropped),
+                "row_conservation_passed": bool(conservation_ok),
+            }
         ],
         schema=schema,
     ).withColumn("run_ts", F.current_timestamp())
@@ -319,7 +395,7 @@ try:
     )
     context.control.finish_run(
         pipeline_name=pipeline_name,
-        run_id=context.audit.get_run_id(),
+        run_id=run_id,
         rows_read=before_ct,
         rows_written=incremental_volume,
         duration_seconds=round(time.time() - timer_start),
@@ -341,7 +417,7 @@ except Exception as exc:
     )
     context.control.fail_run(
         pipeline_name=pipeline_name,
-        run_id=context.audit.get_run_id(),
+        run_id=run_id,
         duration_seconds=round(time.time() - timer_start),
     )
 

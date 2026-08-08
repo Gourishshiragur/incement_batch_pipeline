@@ -9,6 +9,8 @@ Reusable across:
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class PipelineMetrics:
     """
@@ -119,7 +121,7 @@ class PipelineMetrics:
     # Export
     ####################################################################
 
-    def as_dict(self) -> dict[str, int | float]:
+    def as_dict(self) -> dict[str, Any]:
 
         metrics = {
             "rows_read": self.rows_read,

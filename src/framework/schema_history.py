@@ -13,7 +13,7 @@ from __future__ import annotations
 from pyspark.sql import SparkSession
 from pyspark.errors import AnalysisException
 import json
-from typing import Dict, List
+from typing import Any
 import hashlib
 
 
@@ -41,7 +41,7 @@ class SchemaHistory:
     @staticmethod
     def schema_dict(
         df: DataFrame,
-    ) -> Dict[str, str]:
+    ) -> dict[str, str]:
         """
         Convert Spark schema into dictionary.
         """
@@ -121,7 +121,7 @@ class SchemaHistory:
         spark: SparkSession,
         pipeline_name: str,
         stage: str,
-    ) -> Dict[str, str] | None:
+    ) -> dict[str, str] | None:
         """
         Return latest saved schema for a pipeline stage.
         """
@@ -208,9 +208,9 @@ class SchemaHistory:
 
     @staticmethod
     def compare(
-        previous_schema: Dict[str, str],
-        current_schema: Dict[str, str],
-    ) -> List[dict]:
+        previous_schema: dict[str, str],
+        current_schema: dict[str, str],
+    ) -> list[dict[str, Any]]:
         """
         Compare two schema dictionaries.
         """
@@ -265,7 +265,7 @@ class SchemaHistory:
         spark: SparkSession,
         pipeline_name: str,
         stage: str,
-        changes: List[dict],
+        changes: list[dict[str, Any]],
         action: str,
     ) -> None:
         """
@@ -311,8 +311,8 @@ class SchemaHistory:
 
     def has_schema_changed(
         self,
-        previous_schema: Dict[str, str] | None,
-        current_schema: Dict[str, str],
+        previous_schema: dict[str, str] | None,
+        current_schema: dict[str, str],
     ) -> bool:
         """
         Return True if the schema has changed.
@@ -333,7 +333,7 @@ class SchemaHistory:
 
     def schema_report(
         self,
-        changes: List[dict],
+        changes: list[dict[str, Any]],
     ) -> str:
         """
         Return a human-readable schema evolution report.
@@ -342,7 +342,7 @@ class SchemaHistory:
         if not changes:
             return "No schema changes detected."
 
-        report = ["Schema Evolution Report"]
+        report = [f"Schema Evolution Report ({len(changes)} change(s))"]
 
         for change in changes:
 

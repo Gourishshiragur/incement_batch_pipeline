@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from pyspark.sql import SparkSession
 
 from .constants import (
+    FRAMEWORK_VERSION,
     DEFAULT_EXECUTION_ENGINE,
     ENV_DATABRICKS,
     ENV_LOCAL,
@@ -37,6 +38,11 @@ def generate_run_id() -> str:
 
 def generate_execution_id() -> str:
     """Generate a unique execution identifier."""
+    return str(uuid.uuid4())
+
+
+def generate_batch_id() -> str:
+    """Generate a unique batch identifier."""
     return str(uuid.uuid4())
 
 
@@ -69,8 +75,8 @@ def detect_environment(
     spark: SparkSession | None = None,
 ) -> str:
     """
-    Detect whether the pipeline is running
-    locally or in Databricks.
+    Detect whether the pipeline is running locally
+    or in Databricks.
     """
     if spark is None:
         return ENV_LOCAL
@@ -85,6 +91,20 @@ def detect_environment(
 def execution_engine() -> str:
     """Return execution engine."""
     return DEFAULT_EXECUTION_ENGINE
+
+
+def job_name(
+    spark: SparkSession | None = None,
+) -> str | None:
+    """Return Databricks job name if available."""
+
+    if spark is None:
+        return None
+
+    try:
+        return spark.conf.get("spark.databricks.job.name")
+    except Exception:
+        return None
 
 
 # ============================================================
@@ -120,6 +140,34 @@ def cluster_name(
         return None
 
 
+def notebook_path(
+    spark: SparkSession | None = None,
+) -> str | None:
+    """Return notebook path if available."""
+
+    if spark is None:
+        return None
+
+    try:
+        return spark.conf.get("spark.databricks.notebook.path")
+    except Exception:
+        return None
+
+
+def workspace_user(
+    spark: SparkSession | None = None,
+) -> str | None:
+    """Return Databricks workspace user if available."""
+
+    if spark is None:
+        return None
+
+    try:
+        return spark.conf.get("spark.databricks.userInfo.userName")
+    except Exception:
+        return None
+
+
 # ============================================================
 # System Helpers
 # ============================================================
@@ -133,3 +181,28 @@ def hostname() -> str:
 def user_name() -> str:
     """Return current operating system user."""
     return getpass.getuser()
+
+
+def framework_version() -> str:
+    """Return framework version."""
+    return FRAMEWORK_VERSION
+
+
+__all__ = [
+    "generate_run_id",
+    "generate_execution_id",
+    "generate_batch_id",
+    "utc_now",
+    "start_timer",
+    "elapsed_seconds",
+    "detect_environment",
+    "execution_engine",
+    "job_name",
+    "workspace_name",
+    "cluster_name",
+    "notebook_path",
+    "workspace_user",
+    "hostname",
+    "user_name",
+    "framework_version",
+]

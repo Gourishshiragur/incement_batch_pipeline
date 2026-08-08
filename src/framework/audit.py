@@ -22,21 +22,27 @@ from .audit_schema import AUDIT_SCHEMA
 from .constants import (
     DEFAULT_FILES_PROCESSED,
     DEFAULT_RETRY_COUNT,
+    DEFAULT_DURATION,
     STATUS_SUCCESS,
     STATUS_FAILED,
-    FRAMEWORK_VERSION,
+    COL_CREATED_AT,
+    COL_BATCH_ID,
 )
 from .utils import (
     cluster_name,
     detect_environment,
     elapsed_seconds,
     execution_engine,
+    framework_version,
+    generate_batch_id,
     generate_execution_id,
     generate_run_id,
     hostname,
+    job_name,
     user_name,
     utc_now,
     workspace_name,
+    workspace_user,
 )
 
 from pyspark.sql import SparkSession
@@ -55,8 +61,10 @@ class AuditFramework:
         pipeline_name: str,
         pipeline_type: str,
         execution_mode: Optional[str] = None,
-        job_name: Optional[str] = None,
+        job_name_value: Optional[str] = None,
         trigger_type: Optional[str] = None,
+        run_id: Optional[str] = None,
+        execution_id: Optional[str] = None,
     ):
 
         self.pipeline_name = pipeline_name
@@ -65,15 +73,17 @@ class AuditFramework:
 
         self.pipeline_type = pipeline_type
 
-        self.job_name = job_name
+        self.job_name = job_name_value or job_name(self.spark)
 
         self.trigger_type = trigger_type
 
         self.execution_mode = execution_mode
 
-        self.run_id = generate_run_id()
+        self.batch_id = generate_batch_id()
 
-        self.execution_id = generate_execution_id()
+        self.run_id = run_id or generate_run_id()
+
+        self.execution_id = execution_id or generate_execution_id()
 
         self.environment = detect_environment(self.spark)
 
@@ -85,7 +95,7 @@ class AuditFramework:
 
         self.hostname = hostname()
 
-        self.user_name = user_name()
+        self.user_name = workspace_user(self.spark) or user_name()
 
         self.started_at: Optional[datetime] = None
 
@@ -124,15 +134,19 @@ class AuditFramework:
         rows_read: int = 0,
         rows_written: int = 0,
         rows_rejected: int = 0,
+        rows_skipped: int = 0,
+        snapshot_day: int | None = None,
         files_processed: int = DEFAULT_FILES_PROCESSED,
-        source_name: Optional[str] = None,
-        source_path: Optional[str] = None,
-        target_name: Optional[str] = None,
-        target_path: Optional[str] = None,
-        metadata: Optional[dict[str, Any]] = None,
-        duration_seconds: float = 0.0,
-        error_type: Optional[str] = None,
-        error_message: Optional[str] = None,
+        source_name: str | None = None,
+        source_path: str | None = None,
+        source_file: str | None = None,
+        target_name: str | None = None,
+        target_path: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        schema_version: str = "1",
+        duration_seconds: float = DEFAULT_DURATION,
+        error_type: str | None = None,
+        error_message: str | None = None,
     ) -> dict[str, Any]:
         """
         Build a single audit record.
@@ -141,6 +155,7 @@ class AuditFramework:
             # Run Information
             "run_id": self.run_id,
             "execution_id": self.execution_id,
+            COL_BATCH_ID: self.batch_id,
             "pipeline_name": self.pipeline_name,
             "pipeline_type": self.pipeline_type,
             "stage": stage,
@@ -154,10 +169,13 @@ class AuditFramework:
             "rows_read": int(rows_read),
             "rows_written": int(rows_written),
             "rows_rejected": int(rows_rejected),
+            "rows_skipped": int(rows_skipped),
             "files_processed": int(files_processed),
+            "snapshot_day": snapshot_day,
             # Source / Target
             "source_name": source_name or "",
             "source_path": source_path or "",
+            "source_file": source_file or "",
             "target_name": target_name or "",
             "target_path": target_path or "",
             # Execution Context
@@ -177,8 +195,9 @@ class AuditFramework:
             "error_type": error_type or "",
             "error_message": error_message or "",
             # Metadata
-            "created_at": utc_now(),
-            "framework_version": FRAMEWORK_VERSION,
+            COL_CREATED_AT: utc_now(),
+            "framework_version": framework_version(),
+            "schema_version": schema_version,
         }
 
     ####################################################################
@@ -192,12 +211,16 @@ class AuditFramework:
         rows_read: int = 0,
         rows_written: int = 0,
         rows_rejected: int = 0,
+        rows_skipped: int = 0,
+        snapshot_day: int | None = None,
         files_processed: int = DEFAULT_FILES_PROCESSED,
         source_name: Optional[str] = None,
         source_path: Optional[str] = None,
+        source_file: str | None = None,
         target_name: Optional[str] = None,
         target_path: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
+        schema_version: str = "1",
         duration_seconds: float = 0.0,
         error_type: Optional[str] = None,
         error_message: Optional[str] = None,
@@ -211,6 +234,10 @@ class AuditFramework:
             rows_read=rows_read,
             rows_written=rows_written,
             rows_rejected=rows_rejected,
+            rows_skipped=rows_skipped,
+            snapshot_day=snapshot_day,
+            source_file=source_file,
+            schema_version=schema_version,
             files_processed=files_processed,
             source_name=source_name,
             source_path=source_path,
@@ -230,12 +257,16 @@ class AuditFramework:
         rows_read: int = 0,
         rows_written: int = 0,
         rows_rejected: int = 0,
+        rows_skipped: int = 0,
+        snapshot_day: int | None = None,
         files_processed: int = DEFAULT_FILES_PROCESSED,
         source_name: Optional[str] = None,
         source_path: Optional[str] = None,
+        source_file: str | None = None,
         target_name: Optional[str] = None,
         target_path: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
+        schema_version: str = "1",
         timer_start: Optional[float] = None,
     ) -> dict[str, Any]:
         """
@@ -250,6 +281,10 @@ class AuditFramework:
             rows_read=rows_read,
             rows_written=rows_written,
             rows_rejected=rows_rejected,
+            rows_skipped=rows_skipped,
+            snapshot_day=snapshot_day,
+            source_file=source_file,
+            schema_version=schema_version,
             files_processed=files_processed,
             source_name=source_name,
             source_path=source_path,
@@ -297,7 +332,11 @@ class AuditFramework:
         )
 
         if is_databricks:
-            (audit_df.write.mode("append").saveAsTable(audit_path))
+            (
+                audit_df.write.mode("append")
+                .option("mergeSchema", "true")
+                .saveAsTable(audit_path)
+            )
         else:
             (
                 audit_df.write.format("delta")

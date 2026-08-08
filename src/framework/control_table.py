@@ -11,7 +11,7 @@ Tracks pipeline execution metadata.
 
 from __future__ import annotations
 from .control_schema import CONTROL_SCHEMA
-from typing import Optional
+
 
 from delta.tables import DeltaTable
 from pyspark.sql import SparkSession, Row
@@ -27,6 +27,8 @@ from .constants import (
     STATUS_SUCCESS,
     STATUS_FAILED,
     STATUS_SKIPPED,
+    EXECUTION_BATCH,
+    TRIGGER_MANUAL,
 )
 
 
@@ -39,23 +41,28 @@ class ControlTable:
         self,
         spark: SparkSession,
         control_path: str,
+        is_databricks: bool = False,
     ):
 
         self.spark = spark
 
         self.control_path = control_path
+        self.is_databricks = is_databricks
 
     def start_run(
         self,
         pipeline_name: str,
         pipeline_type: str,
         run_id: str,
-        execution_mode: str = "SNAPSHOT",
-        trigger_type: str = "MANUAL",
+        execution_id: str,
+        stage: str,
+        execution_mode: str = EXECUTION_BATCH,
+        trigger_type: str = TRIGGER_MANUAL,
         batch_id: str | None = None,
         snapshot_date: str | None = None,
         source_file: str | None = None,
         watermark: str | None = None,
+        checkpoint: str | None = None,
     ) -> None:
         """
         Register the start of a pipeline execution.
@@ -64,6 +71,8 @@ class ControlTable:
             pipeline_name=pipeline_name,
             pipeline_type=pipeline_type,
             run_id=run_id,
+            execution_id=execution_id,
+            stage=stage,
             execution_mode=execution_mode,
             trigger_type=trigger_type,
             batch_id=batch_id,
@@ -102,6 +111,7 @@ class ControlTable:
         pipeline_name: str,
         run_id: str,
         error_message: str | None = None,
+        duration_seconds: int | None = None,
     ) -> None:
         """
         Mark pipeline execution as failed.
@@ -112,6 +122,7 @@ class ControlTable:
             run_id=run_id,
             status=STATUS_FAILED,
             error_message=error_message,
+            duration_seconds=duration_seconds,
         )
 
     def skip_run(
@@ -144,13 +155,16 @@ class ControlTable:
         pipeline_name: str,
         pipeline_type: str,
         run_id: str,
-        execution_mode: str = "SNAPSHOT",
-        trigger_type: str = "MANUAL",
-        batch_id: Optional[str] = None,
-        snapshot_date: Optional[str] = None,
-        source_file: Optional[str] = None,
-        watermark: Optional[str] = None,
+        execution_id: str,
+        stage: str,
+        execution_mode: str = EXECUTION_BATCH,
+        trigger_type: str = TRIGGER_MANUAL,
+        batch_id: str | None = None,
+        snapshot_date: str | None = None,
+        source_file: str | None = None,
+        watermark: str | None = None,
         status: str = STATUS_STARTED,
+        checkpoint: str | None = None,
     ) -> None:
         """
         Register a pipeline execution.
@@ -160,30 +174,39 @@ class ControlTable:
         df = (
             self.spark.createDataFrame(
                 [
-                    Row(
-                        pipeline_name=pipeline_name,
-                        pipeline_type=pipeline_type,
-                        run_id=run_id,
-                        execution_mode=execution_mode,
-                        trigger_type=trigger_type,
-                        batch_id=batch_id,
-                        snapshot_date=snapshot_date,
-                        source_file=source_file,
-                        watermark=watermark,
-                        status=status,
-                        rows_read=None,
-                        rows_written=None,
-                        duration_seconds=None,
-                        error_message=None,
-                        start_time=None,
-                        end_time=None,
-                        updated_at=None,
-                    )
+                    {
+                        "pipeline_name": pipeline_name,
+                        "pipeline_type": pipeline_type,
+                        "stage": stage,
+                        "run_id": run_id,
+                        "execution_id": execution_id,
+                        "execution_mode": execution_mode,
+                        "trigger_type": trigger_type,
+                        "batch_id": batch_id,
+                        "snapshot_date": snapshot_date,
+                        "source_file": source_file,
+                        "watermark": watermark,
+                        "checkpoint": checkpoint,
+                        "status": status,
+                        "rows_read": None,
+                        "rows_written": None,
+                        "rows_skipped": None,
+                        "duration_seconds": None,
+                        "error_message": None,
+                        "start_time": None,
+                        "end_time": None,
+                        "created_at": None,
+                        "updated_at": None,
+                    }
                 ],
                 schema=CONTROL_SCHEMA,
             )
             .withColumn(
                 "start_time",
+                current_timestamp(),
+            )
+            .withColumn(
+                "created_at",
                 current_timestamp(),
             )
             .withColumn(
@@ -196,7 +219,10 @@ class ControlTable:
             )
         )
 
-        (df.write.format("delta").mode("append").save(self.control_path))
+        if self.is_databricks:
+            (df.write.mode("append").saveAsTable(self.control_path))
+        else:
+            (df.write.format("delta").mode("append").save(self.control_path))
 
     ####################################################################
     # Update Status
@@ -232,15 +258,15 @@ class ControlTable:
         df = (
             self.spark.createDataFrame(
                 [
-                    Row(
-                        pipeline_name=pipeline_name,
-                        run_id=run_id,
-                        status=status,
-                        rows_read=rows_read,
-                        rows_written=rows_written,
-                        duration_seconds=duration_seconds,
-                        error_message=error_message,
-                    )
+                    {
+                        "pipeline_name": pipeline_name,
+                        "run_id": run_id,
+                        "status": status,
+                        "rows_read": rows_read,
+                        "rows_written": rows_written,
+                        "duration_seconds": duration_seconds,
+                        "error_message": error_message,
+                    }
                 ],
                 schema=schema,
             )
@@ -253,16 +279,27 @@ class ControlTable:
                 current_timestamp(),
             )
         )
+        if self.is_databricks:
 
-        if not DeltaTable.isDeltaTable(self.spark, self.control_path):
-            (df.write.format("delta").mode("append").save(self.control_path))
-            return
+            if not self.spark.catalog.tableExists(self.control_path):
+                (df.write.mode("append").saveAsTable(self.control_path))
+                return
 
-        control_table = DeltaTable.forPath(
-            self.spark,
-            self.control_path,
-        )
+            control_table = DeltaTable.forName(
+                self.spark,
+                self.control_path,
+            )
+        else:
+            if not DeltaTable.isDeltaTable(self.spark, self.control_path):
+                raise RuntimeError(
+                    "Control table not initialized. Call start_run() before update_status()."
+                )
 
+            control_table = DeltaTable.forPath(
+                self.spark,
+                self.control_path,
+            )
+            print(">>> ENTERED UPDATE_STATUS MERGE <<<")
         (
             control_table.alias("t")
             .merge(
@@ -276,6 +313,7 @@ class ControlTable:
                     "rows_written": "s.rows_written",
                     "error_message": "s.error_message",
                     "end_time": "s.end_time",
+                    "duration_seconds": "s.duration_seconds",
                     "updated_at": "s.updated_at",
                 }
             )
@@ -308,14 +346,27 @@ class ControlTable:
             ],
         ).withColumn("updated_at", current_timestamp())
 
-        if not DeltaTable.isDeltaTable(self.spark, self.control_path):
-            (df.write.format("delta").mode("append").save(self.control_path))
-            return
+        if self.is_databricks:
 
-        control_table = DeltaTable.forPath(
-            self.spark,
-            self.control_path,
-        )
+            if not self.spark.catalog.tableExists(self.control_path):
+                (df.write.mode("append").saveAsTable(self.control_path))
+                return
+
+            control_table = DeltaTable.forName(
+                self.spark,
+                self.control_path,
+            )
+
+        else:
+
+            if not DeltaTable.isDeltaTable(self.spark, self.control_path):
+                (df.write.format("delta").mode("append").save(self.control_path))
+                return
+
+            control_table = DeltaTable.forPath(
+                self.spark,
+                self.control_path,
+            )
 
         (
             control_table.alias("t")
@@ -344,18 +395,32 @@ class ControlTable:
         """
         Return latest processed watermark.
         """
+        if self.is_databricks:
 
-        if not DeltaTable.isDeltaTable(self.spark, self.control_path):
-            return None
+            if not self.spark.catalog.tableExists(self.control_path):
+                return None
 
-        df = (
-            self.spark.read.format("delta")
-            .load(self.control_path)
-            .filter(f"pipeline_name = '{pipeline_name}'")
-            .select("watermark")
-            .orderBy("updated_at", ascending=False)
-            .limit(1)
-        )
+            df = (
+                self.spark.table(self.control_path)
+                .filter(f"pipeline_name = '{pipeline_name}'")
+                .select("watermark")
+                .orderBy("updated_at", ascending=False)
+                .limit(1)
+            )
+
+        else:
+
+            if not DeltaTable.isDeltaTable(self.spark, self.control_path):
+                return None
+
+            df = (
+                self.spark.read.format("delta")
+                .load(self.control_path)
+                .filter(f"pipeline_name = '{pipeline_name}'")
+                .select("watermark")
+                .orderBy("updated_at", ascending=False)
+                .limit(1)
+            )
 
         rows = df.collect()
 
@@ -368,27 +433,49 @@ class ControlTable:
         self,
         pipeline_name: str,
         source_file: str,
+        stage: str,
     ) -> str | None:
         """
-        Return latest execution status for a source file.
+        Return latest execution status for a given stage of a source file.
+
+        `stage` disambiguates which pipeline stage's status you're asking
+        about (e.g. "bronze", "silver", "gold", "validation") -- without it,
+        this could return a different stage's row for the same
+        pipeline_name + source_file and misreport its status as yours.
         """
 
-        if not DeltaTable.isDeltaTable(
-            self.spark,
-            self.control_path,
-        ):
-            return None
+        if self.is_databricks:
 
-        rows = (
-            self.spark.read.format("delta")
-            .load(self.control_path)
-            .filter(f"pipeline_name = '{pipeline_name}'")
-            .filter(f"source_file = '{source_file}'")
-            .orderBy("updated_at", ascending=False)
-            .select("status")
-            .limit(1)
-            .collect()
-        )
+            if not self.spark.catalog.tableExists(self.control_path):
+                return None
+
+            rows = (
+                self.spark.table(self.control_path)
+                .filter(f"pipeline_name = '{pipeline_name}'")
+                .filter(f"source_file = '{source_file}'")
+                .filter(f"stage = '{stage}'")
+                .orderBy("updated_at", ascending=False)
+                .select("status")
+                .limit(1)
+                .collect()
+            )
+
+        else:
+
+            if not DeltaTable.isDeltaTable(self.spark, self.control_path):
+                return None
+
+            rows = (
+                self.spark.read.format("delta")
+                .load(self.control_path)
+                .filter(f"pipeline_name = '{pipeline_name}'")
+                .filter(f"source_file = '{source_file}'")
+                .filter(f"stage = '{stage}'")
+                .orderBy("updated_at", ascending=False)
+                .select("status")
+                .limit(1)
+                .collect()
+            )
 
         if not rows:
             return None
@@ -399,24 +486,40 @@ class ControlTable:
         self,
         pipeline_name: str,
         source_file: str,
+        stage: str,
     ) -> bool:
         """
-        Return True if the source file has already been
-        processed successfully.
+        Return True if THIS stage has already successfully processed this
+        source file. `stage` is required for the same reason as in
+        last_stage_status() -- without it, Silver would see Bronze's
+        SUCCESS row and skip itself before ever running.
         """
 
-        if not DeltaTable.isDeltaTable(
-            self.spark,
-            self.control_path,
-        ):
-            return False
+        if self.is_databricks:
 
-        df = (
-            self.spark.read.format("delta")
-            .load(self.control_path)
-            .filter(f"pipeline_name = '{pipeline_name}'")
-            .filter(f"source_file = '{source_file}'")
-            .filter("status = 'SUCCESS'")
-        )
+            if not self.spark.catalog.tableExists(self.control_path):
+                return False
+
+            df = (
+                self.spark.table(self.control_path)
+                .filter(f"pipeline_name = '{pipeline_name}'")
+                .filter(f"source_file = '{source_file}'")
+                .filter(f"stage = '{stage}'")
+                .filter(f"status = '{STATUS_SUCCESS}'")
+            )
+
+        else:
+
+            if not DeltaTable.isDeltaTable(self.spark, self.control_path):
+                return False
+
+            df = (
+                self.spark.read.format("delta")
+                .load(self.control_path)
+                .filter(f"pipeline_name = '{pipeline_name}'")
+                .filter(f"source_file = '{source_file}'")
+                .filter(f"stage = '{stage}'")
+                .filter(f"status = '{STATUS_SUCCESS}'")
+            )
 
         return df.limit(1).count() > 0

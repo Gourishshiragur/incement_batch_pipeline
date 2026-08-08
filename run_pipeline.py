@@ -29,6 +29,7 @@ Reconciliation
 Validation
 """
 
+import uuid
 import argparse
 import json
 import subprocess
@@ -40,6 +41,7 @@ from utils.config_loader import (
     get_config,
     get_paths,
     get_environment,
+    get_metadata,
 )
 
 ROOT = Path(__file__).resolve().parent
@@ -62,6 +64,8 @@ def clean_snapshots(landing_dir: Path):
 def run_script(
     script: str,
     *args: str,
+    run_id: str,
+    execution_id: str,
 ):
 
     script_path = ROOT / script
@@ -73,7 +77,13 @@ def run_script(
     start = time.time()
 
     result = subprocess.run(
-        [sys.executable, str(script_path), *args],
+        [
+            sys.executable,
+            str(script_path),
+            *args,
+            run_id,
+            execution_id,
+        ],
         cwd=ROOT,
         text=True,
     )
@@ -124,17 +134,31 @@ def main():
 
     LANDING_DIR = ROOT / paths["landing"]
 
-    stages = config["stages"]
+    metadata = get_metadata()
+
+    orchestration = metadata["orchestration"]
+
+    stages = orchestration["stages"]
+
+    execution_order = orchestration["execution_order"]
 
     execution = []
 
     if args.only:
 
-        execution.append((args.only, stages[args.only]))
+        if not stages[args.only]["enabled"]:
+            raise RuntimeError(f"Stage '{args.only}' is disabled in metadata.")
+
+        execution.append(
+            (
+                args.only,
+                stages[args.only]["script"],
+            )
+        )
 
     else:
 
-        order = ["bronze", "silver", "gold", "validation"]
+        order = execution_order
 
         generate_required = False
 
@@ -162,14 +186,34 @@ def main():
             print("Skipping snapshot generation.\n")
 
         if generate_required:
-            execution.append(("generate", stages["generate"]))
+
+            if stages["generate"]["enabled"]:
+
+                execution.append(
+                    (
+                        "generate",
+                        stages["generate"]["script"],
+                    )
+                )
 
         start_index = order.index(args.start_from)
 
         for stage in order[start_index:]:
-            execution.append((stage, stages[stage]))
+
+            if not stages[stage]["enabled"]:
+                continue
+
+            execution.append(
+                (
+                    stage,
+                    stages[stage]["script"],
+                )
+            )
 
     REPORTS_DIR.mkdir(exist_ok=True)
+
+    shared_run_id = str(uuid.uuid4())
+    shared_execution_id = str(uuid.uuid4())
 
     pipeline_summary = {
         "status": "PASS",
@@ -184,7 +228,7 @@ def main():
 
         for stage_name, script in execution:
 
-            if stage_name in ("bronze", "silver"):
+            if stages[stage_name]["requires_snapshot"]:
 
                 snapshot_files = sorted(LANDING_DIR.glob("snapshot_day*.csv"))
                 if not snapshot_files:
@@ -196,14 +240,23 @@ def main():
 
                     day = file.stem.replace("snapshot_day", "")
 
-                    result = run_script(script, day)
+                    result = run_script(
+                        script,
+                        day,
+                        run_id=shared_run_id,
+                        execution_id=shared_execution_id,
+                    )
                     pipeline_summary["stages"][f"{stage_name}_day{day}"] = {
                         "status": result["status"],
                         "runtime_seconds": result["runtime"],
                     }
             else:
 
-                result = run_script(script)
+                result = run_script(
+                    script,
+                    run_id=shared_run_id,
+                    execution_id=shared_execution_id,
+                )
 
                 pipeline_summary["stages"][stage_name] = {
                     "status": result["status"],

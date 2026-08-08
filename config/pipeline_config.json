@@ -1,15 +1,8 @@
 {
     "environment": "auto",
-    "generate_snapshots": false,
     "execution_mode": "batch",
+    "generate_snapshots": false,
     "stop_on_failure": true,
-    "storage": {
-        "root": "data",
-        "landing": "data/landing",
-        "bronze": "data/bronze",
-        "silver": "data/silver",
-        "gold": "data/gold"
-    },
     "reports_directory": "reports",
     "audit": {
         "enabled": true,

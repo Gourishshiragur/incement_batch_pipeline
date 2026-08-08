@@ -1,9 +1,9 @@
 {
-    "metadata_version": "1.0.0",
+    "metadata_version": "1.1.0",
     "pipeline": {
         "name": "incremental_batch_pipeline",
         "type": "incremental_batch",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "description": "Enterprise Metadata-Driven Incremental Batch Pipeline"
     },
     "environment": {
@@ -40,6 +40,14 @@
                 "reports": "reports",
                 "reconciliation": "reconciliation",
                 "validation": "reports"
+            },
+            "tables": {
+                "bronze": "bronze",
+                "silver": "silver",
+                "gold": "gold",
+                "audit": "audit",
+                "control": "control",
+                "reconciliation": "reconciliation"
             }
         },
         "databricks": {
@@ -62,15 +70,57 @@
                 "validation": "reports"
             },
             "tables": {
-                "bronze": "inc_batch_bronze",
-                "silver": "inc_batch_silver",
-                "gold": "inc_batch_gold",
-                "audit": "inc_batch_audit",
-                "control": "inc_batch_control",
-                "reconciliation": "inc_batch_reconciliation"
+                "bronze": "workspace.default.inc_batch_bronze",
+                "silver": "workspace.default.inc_batch_silver",
+                "gold": "workspace.default.inc_batch_gold",
+                "audit": "workspace.default.inc_batch_audit",
+                "control": "workspace.default.inc_batch_control",
+                "reconciliation": "workspace.default.inc_batch_reconciliation"
             },
             "storage": {
-                "type": "unity_catalog_volume"
+                "type": "unity_catalog_volume",
+                "version": "1.0"
+            }
+        }
+    },
+    "orchestration": {
+        "execution_order": [
+            "bronze",
+            "silver",
+            "gold",
+            "reconciliation",
+            "validation"
+        ],
+        "stages": {
+            "generate": {
+                "script": "00_generate_sample_data.py",
+                "enabled": true,
+                "requires_snapshot": false
+            },
+            "bronze": {
+                "script": "01_bronze_ingest.py",
+                "enabled": true,
+                "requires_snapshot": true
+            },
+            "silver": {
+                "script": "02_silver_merge_upsert.py",
+                "enabled": true,
+                "requires_snapshot": true
+            },
+            "gold": {
+                "script": "03_gold_kpi_aggregation.py",
+                "enabled": true,
+                "requires_snapshot": false
+            },
+            "reconciliation": {
+                "script": "03_reconciliation.py",
+                "enabled": true,
+                "requires_snapshot": false
+            },
+            "validation": {
+                "script": "04_validation.py",
+                "enabled": true,
+                "requires_snapshot": false
             }
         }
     }

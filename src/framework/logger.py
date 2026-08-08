@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import Optional
 
 
 class PipelineLogger:
@@ -40,18 +39,20 @@ class PipelineLogger:
         # Prevent duplicate log messages
         self.logger.propagate = False
 
-        if not self.logger.handlers:
+        # Remove existing handlers (avoids duplicate logs after notebook reruns)
+        if self.logger.handlers:
+            self.logger.handlers.clear()
 
-            handler = logging.StreamHandler(sys.stdout)
+        handler = logging.StreamHandler(sys.stdout)
 
-            formatter = logging.Formatter(
-                fmt="[%(asctime)s] %(levelname)s | %(name)s | %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
-            )
+        formatter = logging.Formatter(
+            fmt="[%(asctime)s] %(levelname)s | %(name)s | %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
 
-            handler.setFormatter(formatter)
+        handler.setFormatter(formatter)
 
-            self.logger.addHandler(handler)
+        self.logger.addHandler(handler)
 
     ####################################################################
     # Logging API
@@ -89,6 +90,9 @@ class PipelineLogger:
     def pipeline_completed(self) -> None:
         self.info(f"Pipeline '{self.pipeline_name}' completed successfully.")
 
+    def pipeline_skipped(self) -> None:
+        self.info(f"Pipeline '{self.pipeline_name}' skipped.")
+
     def pipeline_failed(
         self,
         error: str | None = None,
@@ -111,19 +115,25 @@ class PipelineLogger:
     def stage_failed(self, stage: str, error: str) -> None:
         self.error(f"{stage} failed: {error}")
 
+    def stage_warning(self, stage: str, message: str) -> None:
+        self.warning(f"{stage}: {message}")
+
     def exception(
         self,
         message: str,
-        exception: Optional[Exception] = None,
+        exception: Exception | None = None,
     ) -> None:
         """
         Log an exception with traceback.
         """
 
         if exception is None:
-            self.logger.exception(message)
+            self.logger.exception(message, exc_info=True)
         else:
-            self.logger.exception(f"{message}: {exception}")
+            self.logger.exception(
+                f"{message}: {exception}",
+                exc_info=True,
+            )
 
 
 def get_logger(name: str) -> logging.Logger:

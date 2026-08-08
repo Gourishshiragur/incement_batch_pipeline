@@ -7,15 +7,32 @@
 # COMMAND ----------
 
 
+import os
 import sys
-from pathlib import Path
-import time
 import json
+import time
+from pathlib import Path
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Local only: add project root for imports
+if not os.getenv("DATABRICKS_RUNTIME_VERSION"):
+    PROJECT_ROOT = Path.cwd()
 
-REPORT_DIR = PROJECT_ROOT / "reports"
-REPORT_DIR.mkdir(exist_ok=True)
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
+
+from utils.config_loader import get_storage_path
+
+# ------------------------------------------------------------------
+# Report directory
+# ------------------------------------------------------------------
+
+
+if os.getenv("DATABRICKS_RUNTIME_VERSION"):
+    REPORT_DIR = Path(get_storage_path("audit"))
+else:
+    REPORT_DIR = Path.cwd() / "reports"
+
+REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def write_stage_status(status: str, rows: int = 0):
@@ -37,9 +54,6 @@ def write_stage_status(status: str, rows: int = 0):
             indent=4,
         )
 
-
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.pipeline.pipeline_core_spark import bronze_processing
 
@@ -78,7 +92,25 @@ if not IS_DATABRICKS:
         .config("spark.hadoop.io.native.lib.available", "false")
     )
 
-    spark = configure_spark_with_delta_pip(builder).getOrCreate()
+spark = configure_spark_with_delta_pip(builder).getOrCreate()
+
+
+if IS_DATABRICKS:
+
+    dbutils.widgets.text("snapshot_day", "0")
+    dbutils.widgets.text("run_id", "")
+    dbutils.widgets.text("execution_id", "")
+
+    snapshot_day = dbutils.widgets.get("snapshot_day")
+    shared_run_id = dbutils.widgets.get("run_id") or None
+    shared_execution_id = dbutils.widgets.get("execution_id") or None
+
+else:
+
+    snapshot_day = sys.argv[1] if len(sys.argv) > 1 else "0"
+    shared_run_id = sys.argv[2] if len(sys.argv) > 2 else None
+    shared_execution_id = sys.argv[3] if len(sys.argv) > 3 else None
+
 
 context = FrameworkContext(
     spark=spark,
@@ -88,45 +120,27 @@ context = FrameworkContext(
     quarantine_path=paths["quarantine"],
     schema_history_path=paths["schema_history"],
     schema_changes_path=paths["schema_changes"],
+    run_id=shared_run_id,
+    execution_id=shared_execution_id,
 )
-
-
 context.logger.debug(f"Resolved paths: {paths}")
-
-if IS_DATABRICKS:
-    dbutils.widgets.text("snapshot_day", "0", "Day index of snapshot file to ingest")
-    snapshot_day = dbutils.widgets.get("snapshot_day")
-else:
-    snapshot_day = sys.argv[1] if len(sys.argv) > 1 else "0"
-
-
 LANDING_PATH = f"{paths['landing']}/snapshot_day{snapshot_day}.csv"
-SOURCE_FILE = LANDING_PATH
+SOURCE_FILE = Path(LANDING_PATH).name
 
 context.logger.info(f"Checking source file : {SOURCE_FILE}")
 context.logger.info(f"Control table path   : {paths['control']}")
 
 context.logger.pipeline_started()
-context.audit.start_run()
-context.control.start_run(
-    pipeline_name=pipeline_name,
-    pipeline_type=metadata["pipeline"]["type"],
-    run_id=context.audit.get_run_id(),
-    source_file=SOURCE_FILE,
-)
+
+run_id = context.audit.start_run()
+
+
 if context.control.already_processed(
     pipeline_name,
     SOURCE_FILE,
+    stage="bronze",
 ):
     context.logger.info(f"Skipping already processed source: {SOURCE_FILE}")
-
-    context.control.skip_run(
-        pipeline_name=pipeline_name,
-        run_id=context.audit.get_run_id(),
-        rows_read=0,
-        rows_written=0,
-        duration_seconds=0,
-    )
 
     write_stage_status("SKIPPED", 0)
 
@@ -135,7 +149,14 @@ if context.control.already_processed(
     else:
         sys.exit(0)
 
-
+context.control.start_run(
+    pipeline_name=pipeline_name,
+    pipeline_type=metadata["pipeline"]["type"],
+    run_id=run_id,
+    execution_id=context.audit.get_execution_id(),
+    stage="bronze",
+    source_file=SOURCE_FILE,
+)
 if IS_DATABRICKS:
     BRONZE_TABLE = paths["bronze"]
     AUDIT_TABLE = paths["audit_table"]
@@ -183,7 +204,7 @@ except Exception as exc:
     )
     context.control.fail_run(
         pipeline_name=pipeline_name,
-        run_id=context.audit.get_run_id(),
+        run_id=run_id,
     )
 
     context.logger.pipeline_failed(str(exc))
@@ -235,7 +256,7 @@ context.audit.write_record(
 
 context.control.finish_run(
     pipeline_name=pipeline_name,
-    run_id=context.audit.get_run_id(),
+    run_id=run_id,
     rows_read=landing_total_count,
     rows_written=record_count,
     duration_seconds=round(time.time() - timer_start),

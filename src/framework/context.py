@@ -12,7 +12,7 @@ Reusable across:
 from __future__ import annotations
 
 from pyspark.sql import SparkSession
-
+import os
 from .audit import AuditFramework
 from .control_table import ControlTable
 from .error_logger import ErrorLogger
@@ -21,6 +21,11 @@ from .metrics import PipelineMetrics
 from .quarantine import QuarantineManager
 from .schema_history import SchemaHistory
 from .schema_validator import SchemaValidator
+from .constants import (
+    EXECUTION_BATCH,
+    TRIGGER_MANUAL,
+    ENV_DATABRICKS,
+)
 
 
 class FrameworkContext:
@@ -39,9 +44,11 @@ class FrameworkContext:
         quarantine_path: str,
         schema_history_path: str,
         schema_changes_path: str,
-        execution_mode: str | None = None,
+        execution_mode: str = EXECUTION_BATCH,
         job_name: str | None = None,
-        trigger_type: str | None = None,
+        trigger_type: str = TRIGGER_MANUAL,
+        run_id: str | None = None,
+        execution_id: str | None = None,
     ):
 
         self.spark = spark
@@ -50,6 +57,8 @@ class FrameworkContext:
         self.execution_mode = execution_mode
         self.job_name = job_name
         self.trigger_type = trigger_type
+        self.run_id = run_id
+        self.execution_id = execution_id
         self.control_path = control_path
         self.quarantine_path = quarantine_path
         self.schema_history = SchemaHistory(
@@ -77,8 +86,10 @@ class FrameworkContext:
             pipeline_name=pipeline_name,
             pipeline_type=pipeline_type,
             execution_mode=execution_mode,
-            job_name=job_name,
+            job_name_value=job_name,
             trigger_type=trigger_type,
+            run_id=run_id,
+            execution_id=execution_id,
         )
 
         ###########################################################
@@ -108,4 +119,5 @@ class FrameworkContext:
         self.control = ControlTable(
             spark=spark,
             control_path=control_path,
+            is_databricks=("DATABRICKS_RUNTIME_VERSION" in os.environ),
         )

@@ -18,17 +18,18 @@
 # MAGIC machine with current KPIs, updated daily after this notebook runs.
 
 # COMMAND ----------
-from pathlib import Path
+import os
 import sys
+from pathlib import Path
 import time
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+# Local only: add project root for imports
+if not os.getenv("DATABRICKS_RUNTIME_VERSION"):
+    PROJECT_ROOT = Path.cwd()
 
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+    if str(PROJECT_ROOT) not in sys.path:
+        sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.pipeline.pipeline_core_spark import gold_processing
-from src.framework.context import FrameworkContext
 from utils.config_loader import (
     get_paths,
     get_environment,
@@ -36,21 +37,29 @@ from utils.config_loader import (
     get_metadata,
     get_pipeline_name,
 )
-from src.framework.constants import (
-    STATUS_SKIPPED,
-    STATUS_FAILED,
-    STATUS_STARTED,
-)
 
+# Load configuration first
 pipeline_name = get_pipeline_name()
-
 config = get_config()
 metadata = get_metadata()
+pipeline_type = metadata.get("pipeline", {}).get("type", "batch")
 paths = get_paths()
 environment = get_environment()
 
 IS_DATABRICKS = environment == "databricks"
 
+
+# Project imports
+from src.pipeline.pipeline_core_spark import gold_processing
+from src.framework.context import FrameworkContext
+from src.framework.constants import (
+    STATUS_SUCCESS,
+    STATUS_SKIPPED,
+    STATUS_FAILED,
+    STATUS_STARTED,
+)
+
+# Local Spark session
 if not IS_DATABRICKS:
     from delta import configure_spark_with_delta_pip
     from pyspark.sql import SparkSession
@@ -71,41 +80,58 @@ if not IS_DATABRICKS:
     )
 
     spark = configure_spark_with_delta_pip(builder).getOrCreate()
+
+# Runtime parameter
 if IS_DATABRICKS:
+
     dbutils.widgets.text("snapshot_day", "0", "Day index being processed")
+    dbutils.widgets.text("run_id", "")
+    dbutils.widgets.text("execution_id", "")
+
     snapshot_day = dbutils.widgets.get("snapshot_day")
+    shared_run_id = dbutils.widgets.get("run_id") or None
+    shared_execution_id = dbutils.widgets.get("execution_id") or None
+
 else:
+
     snapshot_day = sys.argv[1] if len(sys.argv) > 1 else "0"
+    shared_run_id = sys.argv[2] if len(sys.argv) > 2 else None
+    shared_execution_id = sys.argv[3] if len(sys.argv) > 3 else None
+
+SOURCE_FILE = f"snapshot_day{snapshot_day}.csv"
+
 context = FrameworkContext(
     spark=spark,
     pipeline_name=pipeline_name,
-    pipeline_type=metadata["pipeline"]["type"],
+    pipeline_type=pipeline_type,
     control_path=paths["control"],
     quarantine_path=paths["quarantine"],
     schema_history_path=paths["schema_history"],
     schema_changes_path=paths["schema_changes"],
+    run_id=shared_run_id,
+    execution_id=shared_execution_id,
 )
 
 context.logger.pipeline_started()
-context.audit.start_run()
-context.control.start_run(
-    pipeline_name=pipeline_name,
-    pipeline_type=metadata["pipeline"]["type"],
-    run_id=context.audit.get_run_id(),
-)
+
+run_id = context.audit.start_run()
 
 previous_status = context.control.last_stage_status(
     pipeline_name=pipeline_name,
-    source_file=f"{paths['landing']}/snapshot_day{snapshot_day}.csv",
+    source_file=SOURCE_FILE,
+    stage="silver",
 )
 
-if previous_status == STATUS_SKIPPED:
+if previous_status == STATUS_SUCCESS:
+    pass
+
+elif previous_status == STATUS_SKIPPED:
 
     context.logger.info("Silver skipped. Skipping Gold.")
 
     context.control.skip_run(
         pipeline_name=pipeline_name,
-        run_id=context.audit.get_run_id(),
+        run_id=run_id,
     )
 
     if IS_DATABRICKS:
@@ -117,7 +143,7 @@ elif previous_status == STATUS_FAILED:
 
     context.control.fail_run(
         pipeline_name=pipeline_name,
-        run_id=context.audit.get_run_id(),
+        run_id=run_id,
         error_message="Silver stage failed.",
     )
 
@@ -127,11 +153,50 @@ elif previous_status == STATUS_STARTED:
 
     context.control.fail_run(
         pipeline_name=pipeline_name,
-        run_id=context.audit.get_run_id(),
+        run_id=run_id,
         error_message="Silver stage did not complete.",
     )
 
     raise RuntimeError("Silver stage did not complete.")
+
+else:
+
+    context.control.fail_run(
+        pipeline_name=pipeline_name,
+        run_id=run_id,
+        error_message=f"Unexpected Silver status: {previous_status}",
+    )
+
+    raise RuntimeError(f"Unexpected Silver status: {previous_status}")
+
+# Skip if Gold has already successfully processed this exact source file --
+# without this check (and the stage= filter on already_processed), Gold
+# would re-run its full aggregation + OPTIMIZE on every run for the same day.
+if context.control.already_processed(
+    pipeline_name,
+    SOURCE_FILE,
+    stage="gold",
+):
+    context.logger.info(f"Gold already processed for: {SOURCE_FILE}")
+
+    context.control.skip_run(
+        pipeline_name=pipeline_name,
+        run_id=run_id,
+    )
+
+    if IS_DATABRICKS:
+        dbutils.notebook.exit("SKIPPED")
+    else:
+        sys.exit(0)
+
+context.control.start_run(
+    pipeline_name=pipeline_name,
+    pipeline_type=pipeline_type,
+    run_id=run_id,
+    execution_id=context.audit.get_execution_id(),
+    stage="gold",
+    source_file=SOURCE_FILE,
+)
 context.logger.debug(f"Resolved paths: {paths}")
 
 SILVER_SOURCE = paths["silver"]
@@ -152,14 +217,21 @@ context.logger.info(f"Source : {SILVER_SOURCE}")
 
 context.logger.info(f"Target : {GOLD_TARGET}")
 
-silver_count = spark.read.format("delta").load(SILVER_SOURCE).count()
+if IS_DATABRICKS:
+    silver_count = spark.table(SILVER_SOURCE).count()
+else:
+    silver_count = spark.read.format("delta").load(SILVER_SOURCE).count()
 context.logger.info(f"Silver input rows : {silver_count:,}")
+
 
 start_time = time.time()
 
 # COMMAND ----------
 
 try:
+    if silver_count == 0:
+        raise RuntimeError("Silver table contains no rows.")
+
     gold_df, gold_count = gold_processing(
         spark=spark,
         silver_source=SILVER_SOURCE,
@@ -201,7 +273,7 @@ except Exception as exc:
 
     context.control.fail_run(
         pipeline_name=pipeline_name,
-        run_id=context.audit.get_run_id(),
+        run_id=run_id,
         duration_seconds=round(time.time() - start_time),
     )
 
@@ -257,7 +329,7 @@ context.audit.write_record(
 context.logger.info("KPI aggregation completed successfully.")
 context.control.finish_run(
     pipeline_name=pipeline_name,
-    run_id=context.audit.get_run_id(),
+    run_id=run_id,
     rows_read=silver_count,
     rows_written=gold_count,
     duration_seconds=round(time.time() - start_time),
