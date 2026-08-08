@@ -93,18 +93,8 @@ def get_paths():
 
     # Bronze/Silver/Gold/Control targets
     if env == "databricks":
-        paths["bronze"] = cfg["tables"]["bronze"]
-        paths["silver"] = cfg["tables"]["silver"]
-        paths["gold"] = cfg["tables"]["gold"]
-        paths["control"] = cfg["tables"]["control"]
-        paths["reconciliation"] = cfg["tables"]["reconciliation"]
-        paths["audit_table"] = cfg["tables"]["audit"]
-    else:
-        paths["bronze"] = f"{base}/{cfg['folders']['bronze']}"
-        paths["silver"] = f"{base}/{cfg['folders']['silver']}"
-        paths["gold"] = f"{base}/{cfg['folders']['gold']}"
-        paths["control"] = f"{base}/{cfg['folders']['control']}"
-        paths["reconciliation"] = f"{base}/{cfg['folders']['reconciliation']}"
+        for name, table in cfg["tables"].items():
+            paths[f"{name}_table"] = table
 
     return paths
 

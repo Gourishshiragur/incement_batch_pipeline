@@ -28,7 +28,7 @@ from utils.config_loader import get_storage_path
 
 
 if os.getenv("DATABRICKS_RUNTIME_VERSION"):
-    REPORT_DIR = Path(get_storage_path("audit"))
+    REPORT_DIR = Path(get_storage_path("reports"))
 else:
     REPORT_DIR = Path.cwd() / "reports"
 
@@ -92,7 +92,7 @@ if not IS_DATABRICKS:
         .config("spark.hadoop.io.native.lib.available", "false")
     )
 
-spark = configure_spark_with_delta_pip(builder).getOrCreate()
+    spark = configure_spark_with_delta_pip(builder).getOrCreate()
 
 
 if IS_DATABRICKS:
@@ -117,9 +117,12 @@ context = FrameworkContext(
     pipeline_name=pipeline_name,
     pipeline_type=metadata["pipeline"]["type"],
     control_path=paths["control"],
+    control_table=paths["control_table"],
     quarantine_path=paths["quarantine"],
     schema_history_path=paths["schema_history"],
+    schema_history_table=paths["schema_history_table"],
     schema_changes_path=paths["schema_changes"],
+    schema_changes_table=paths["schema_changes_table"],
     run_id=shared_run_id,
     execution_id=shared_execution_id,
 )
@@ -128,7 +131,9 @@ LANDING_PATH = f"{paths['landing']}/snapshot_day{snapshot_day}.csv"
 SOURCE_FILE = Path(LANDING_PATH).name
 
 context.logger.info(f"Checking source file : {SOURCE_FILE}")
-context.logger.info(f"Control table path   : {paths['control']}")
+control_target = paths["control_table"] if IS_DATABRICKS else paths["control"]
+
+context.logger.info(f"Control Target : {control_target}")
 
 context.logger.pipeline_started()
 
@@ -158,7 +163,7 @@ context.control.start_run(
     source_file=SOURCE_FILE,
 )
 if IS_DATABRICKS:
-    BRONZE_TABLE = paths["bronze"]
+    BRONZE_TABLE = paths["bronze_table"]
     AUDIT_TABLE = paths["audit_table"]
 else:
     BRONZE_PATH = paths["bronze"]

@@ -105,13 +105,15 @@ context = FrameworkContext(
     pipeline_name=pipeline_name,
     pipeline_type=pipeline_type,
     control_path=paths["control"],
+    control_table=paths["control_table"],
     quarantine_path=paths["quarantine"],
     schema_history_path=paths["schema_history"],
+    schema_history_table=paths["schema_history_table"],
     schema_changes_path=paths["schema_changes"],
+    schema_changes_table=paths["schema_changes_table"],
     run_id=shared_run_id,
     execution_id=shared_execution_id,
 )
-
 context.logger.pipeline_started()
 
 run_id = context.audit.start_run()
@@ -199,13 +201,15 @@ context.control.start_run(
 )
 context.logger.debug(f"Resolved paths: {paths}")
 
-SILVER_SOURCE = paths["silver"]
-GOLD_TARGET = paths["gold"]
-
 if IS_DATABRICKS:
+    SILVER_SOURCE = paths["silver_table"]
+    GOLD_TARGET = paths["gold_table"]
     AUDIT_TABLE = paths["audit_table"]
 else:
+    SILVER_SOURCE = paths["silver"]
+    GOLD_TARGET = paths["gold"]
     AUDIT_PATH = paths["audit"]
+
 
 audit_target = AUDIT_TABLE if IS_DATABRICKS else AUDIT_PATH
 # COMMAND ----------
@@ -216,14 +220,18 @@ context.logger.info("=" * 80)
 context.logger.info(f"Source : {SILVER_SOURCE}")
 
 context.logger.info(f"Target : {GOLD_TARGET}")
-
 if IS_DATABRICKS:
+
+    if not spark.catalog.tableExists(SILVER_SOURCE):
+        raise RuntimeError(f"Silver table '{SILVER_SOURCE}' does not exist.")
+
     silver_count = spark.table(SILVER_SOURCE).count()
+
 else:
+
     silver_count = spark.read.format("delta").load(SILVER_SOURCE).count()
+
 context.logger.info(f"Silver input rows : {silver_count:,}")
-
-
 start_time = time.time()
 
 # COMMAND ----------
@@ -278,7 +286,7 @@ except Exception as exc:
     )
 
     context.logger.pipeline_failed(str(exc))
-    context.exception("Gold processing failed", exc)
+    context.logger.exception(f"Gold processing failed: {exc}")
 
     raise
 

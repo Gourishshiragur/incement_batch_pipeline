@@ -41,16 +41,18 @@ class FrameworkContext:
         pipeline_name: str,
         pipeline_type: str,
         control_path: str,
+        control_table: str,
         quarantine_path: str,
         schema_history_path: str,
+        schema_history_table: str,
         schema_changes_path: str,
+        schema_changes_table: str,
         execution_mode: str = EXECUTION_BATCH,
         job_name: str | None = None,
         trigger_type: str = TRIGGER_MANUAL,
         run_id: str | None = None,
         execution_id: str | None = None,
     ):
-
         self.spark = spark
         self.pipeline_name = pipeline_name
         self.pipeline_type = pipeline_type
@@ -62,8 +64,12 @@ class FrameworkContext:
         self.control_path = control_path
         self.quarantine_path = quarantine_path
         self.schema_history = SchemaHistory(
+            spark=spark,
+            is_databricks=("DATABRICKS_RUNTIME_VERSION" in os.environ),
             schema_history_path=schema_history_path,
+            schema_history_table=schema_history_table,
             schema_changes_path=schema_changes_path,
+            schema_changes_table=schema_changes_table,
         )
         ###########################################################
         # Logger
@@ -119,5 +125,6 @@ class FrameworkContext:
         self.control = ControlTable(
             spark=spark,
             control_path=control_path,
+            control_table=control_table,
             is_databricks=("DATABRICKS_RUNTIME_VERSION" in os.environ),
         )

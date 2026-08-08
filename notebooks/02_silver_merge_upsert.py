@@ -103,9 +103,12 @@ context = FrameworkContext(
     pipeline_name=pipeline_name,
     pipeline_type=pipeline_type,
     control_path=paths["control"],
+    control_table=paths["control_table"],
     quarantine_path=paths["quarantine"],
     schema_history_path=paths["schema_history"],
+    schema_history_table=paths["schema_history_table"],
     schema_changes_path=paths["schema_changes"],
+    schema_changes_table=paths["schema_changes_table"],
     run_id=shared_run_id,
     execution_id=shared_execution_id,
 )
@@ -199,9 +202,9 @@ context.logger.debug(f"Resolved paths: {paths}")
 
 
 if IS_DATABRICKS:
-    BRONZE_TABLE = paths["bronze"]
-    SILVER_TABLE = paths["silver"]
-    RECON_TABLE = paths["reconciliation"]
+    BRONZE_TABLE = paths["bronze_table"]
+    SILVER_TABLE = paths["silver_table"]
+    RECON_TABLE = paths["reconciliation_table"]
     AUDIT_TABLE = paths["audit_table"]
 else:
     BRONZE_PATH = paths["bronze"]
@@ -305,16 +308,22 @@ try:
     context.logger.info("=" * 60)
     context.logger.info("SOURCE COLUMNS")
     context.logger.info(to_merge.columns)
+    context.logger.info("=" * 60)
+    context.logger.info("TARGET COLUMNS")
 
     if IS_DATABRICKS:
-        context.logger.info("=" * 60)
-        context.logger.info("TARGET COLUMNS")
-        spark.table(SILVER_TABLE).printSchema()
 
-    elif DeltaTable.isDeltaTable(spark, silver_target):
-        context.logger.info("=" * 60)
-        context.logger.info("TARGET COLUMNS")
-        spark.read.format("delta").load(silver_target).printSchema()
+        if spark.catalog.tableExists(SILVER_TABLE):
+            spark.table(SILVER_TABLE).printSchema()
+        else:
+            context.logger.info("Silver table does not exist yet.")
+
+    else:
+
+        if DeltaTable.isDeltaTable(spark, silver_target):
+            spark.read.format("delta").load(silver_target).printSchema()
+        else:
+            context.logger.info("Silver Delta table does not exist yet.")
 
     context.logger.info("=" * 60)
 
@@ -422,7 +431,7 @@ except Exception as exc:
     )
 
     context.logger.pipeline_failed(str(exc))
-    context.exception("Silver processing failed", exc)
+    context.logger.exception(f"Silver processing failed: {exc}")
 
     raise
 

@@ -15,7 +15,7 @@ from pyspark.errors import AnalysisException
 import json
 from typing import Any
 import hashlib
-
+from delta.tables import DeltaTable
 
 from pyspark.sql import DataFrame
 from pyspark.sql.functions import current_timestamp, col
@@ -28,11 +28,21 @@ class SchemaHistory:
 
     def __init__(
         self,
+        spark: SparkSession,
+        is_databricks: bool,
         schema_history_path: str,
+        schema_history_table: str,
         schema_changes_path: str,
+        schema_changes_table: str,
     ):
+        self.spark = spark
+        self.is_databricks = is_databricks
+
         self.schema_history_path = schema_history_path
+        self.schema_history_table = schema_history_table
+
         self.schema_changes_path = schema_changes_path
+        self.schema_changes_table = schema_changes_table
 
     ####################################################################
     # Schema Utilities
@@ -83,6 +93,7 @@ class SchemaHistory:
             stage,
         )
 
+        # No schema change
         if latest_hash == schema_hash:
             return
 
@@ -114,7 +125,40 @@ class SchemaHistory:
             current_timestamp(),
         )
 
-        (history_df.write.format("delta").mode("append").save(self.schema_history_path))
+        if self.is_databricks:
+
+            if self.spark.catalog.tableExists(self.schema_history_table):
+
+                (history_df.write.mode("append").saveAsTable(self.schema_history_table))
+
+            else:
+
+                (
+                    history_df.write.mode("overwrite").saveAsTable(
+                        self.schema_history_table
+                    )
+                )
+
+        else:
+
+            if DeltaTable.isDeltaTable(
+                self.spark,
+                self.schema_history_path,
+            ):
+
+                (
+                    history_df.write.format("delta")
+                    .mode("append")
+                    .save(self.schema_history_path)
+                )
+
+            else:
+
+                (
+                    history_df.write.format("delta")
+                    .mode("overwrite")
+                    .save(self.schema_history_path)
+                )
 
     def load_latest_schema(
         self,
@@ -128,23 +172,50 @@ class SchemaHistory:
 
         try:
 
-            history_df = (
-                spark.read.format("delta")
-                .load(self.schema_history_path)
-                .filter(col("pipeline_name") == pipeline_name)
-                .filter(col("stage") == stage)
-                .orderBy(col("version").desc())
-                .limit(1)
-            )
+            if self.is_databricks:
+
+                if not self.spark.catalog.tableExists(
+                    self.schema_history_table,
+                ):
+                    return None
+
+                history_df = (
+                    self.spark.table(self.schema_history_table)
+                    .filter(col("pipeline_name") == pipeline_name)
+                    .filter(col("stage") == stage)
+                    .orderBy(col("version").desc())
+                    .limit(1)
+                )
+
+            else:
+
+                if not DeltaTable.isDeltaTable(
+                    self.spark,
+                    self.schema_history_path,
+                ):
+                    return None
+
+                history_df = (
+                    self.spark.read.format("delta")
+                    .load(self.schema_history_path)
+                    .filter(col("pipeline_name") == pipeline_name)
+                    .filter(col("stage") == stage)
+                    .orderBy(col("version").desc())
+                    .limit(1)
+                )
+
+            if history_df.rdd.isEmpty():
+                return None
+
+            row = history_df.first()
+
+            if row is None:
+                return None
+
+            return json.loads(row["schema_json"])
+
         except AnalysisException:
             return None
-
-        row = history_df.first()
-
-        if row is None:
-            return None
-
-        return json.loads(row["schema_json"])
 
     def load_latest_hash(
         self,
@@ -155,25 +226,52 @@ class SchemaHistory:
         """
         Return the latest schema hash for a pipeline stage.
         """
-
         try:
-            history_df = (
-                spark.read.format("delta")
-                .load(self.schema_history_path)
-                .filter(col("pipeline_name") == pipeline_name)
-                .filter(col("stage") == stage)
-                .orderBy(col("version").desc())
-                .limit(1)
-            )
+
+            if self.is_databricks:
+
+                if not self.spark.catalog.tableExists(
+                    self.schema_history_table,
+                ):
+                    return None
+
+                history_df = (
+                    self.spark.table(self.schema_history_table)
+                    .filter(col("pipeline_name") == pipeline_name)
+                    .filter(col("stage") == stage)
+                    .orderBy(col("version").desc())
+                    .limit(1)
+                )
+
+            else:
+
+                if not DeltaTable.isDeltaTable(
+                    self.spark,
+                    self.schema_history_path,
+                ):
+                    return None
+
+                history_df = (
+                    self.spark.read.format("delta")
+                    .load(self.schema_history_path)
+                    .filter(col("pipeline_name") == pipeline_name)
+                    .filter(col("stage") == stage)
+                    .orderBy(col("version").desc())
+                    .limit(1)
+                )
+
+            if history_df.rdd.isEmpty():
+                return None
+
+            row = history_df.first()
+
+            if row is None:
+                return None
+
+            return row["schema_hash"]
+
         except AnalysisException:
             return None
-
-        row = history_df.first()
-
-        if row is None:
-            return None
-
-        return row["schema_hash"]
 
     def get_next_version(
         self,
@@ -186,21 +284,44 @@ class SchemaHistory:
         """
 
         try:
-            history_df = (
-                spark.read.format("delta")
-                .load(self.schema_history_path)
-                .filter(col("pipeline_name") == pipeline_name)
-                .filter(col("stage") == stage)
-            )
+
+            if self.is_databricks:
+
+                if not self.spark.catalog.tableExists(
+                    self.schema_history_table,
+                ):
+                    return 1
+
+                history_df = (
+                    self.spark.table(self.schema_history_table)
+                    .filter(col("pipeline_name") == pipeline_name)
+                    .filter(col("stage") == stage)
+                )
+
+            else:
+
+                if not DeltaTable.isDeltaTable(
+                    self.spark,
+                    self.schema_history_path,
+                ):
+                    return 1
+
+                history_df = (
+                    self.spark.read.format("delta")
+                    .load(self.schema_history_path)
+                    .filter(col("pipeline_name") == pipeline_name)
+                    .filter(col("stage") == stage)
+                )
+
+            if history_df.rdd.isEmpty():
+                return 1
+
+            latest_version = history_df.agg({"version": "max"}).first()[0]
+
+            return 1 if latest_version is None else latest_version + 1
+
         except AnalysisException:
             return 1
-
-        latest_version = history_df.agg({"version": "max"}).first()[0]
-
-        if latest_version is None:
-            return 1
-
-        return latest_version + 1
 
     ####################################################################
     # Schema Comparison
@@ -307,7 +428,17 @@ class SchemaHistory:
             current_timestamp(),
         )
 
-        (history_df.write.format("delta").mode("append").save(self.schema_changes_path))
+        if self.is_databricks:
+
+            (history_df.write.mode("append").saveAsTable(self.schema_changes_table))
+
+        else:
+
+            (
+                history_df.write.format("delta")
+                .mode("append")
+                .save(self.schema_changes_path)
+            )
 
     def has_schema_changed(
         self,

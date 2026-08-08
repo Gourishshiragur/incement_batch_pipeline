@@ -321,21 +321,30 @@ def silver_change_detection(
     Returns:
         (to_merge_df, new_count, changed_count, unchanged_count)
     """
-    if not DeltaTable.isDeltaTable(spark, silver_path):
-        # First run: entire snapshot is new. Do NOT persist _change_type into
-        # the Silver table's schema -- it's an internal classification column,
-        # not part of the state. (Matches pipeline_core.py's pandas behavior,
-        # where run 1 also never writes _change_type to persisted state.)
-        to_merge = silver_candidate
-        return to_merge, silver_candidate.count(), 0, 0
+    if IS_DATABRICKS:
 
-    prior_df = (
-        spark.read.format("delta")
-        .load(silver_path)
-        .select(["reading_id"] + TRACKED_FIELDS)
-        .withColumn("_prior_exists", F.lit(True))
-        .alias("prior")
-    )
+        if not spark.catalog.tableExists(silver_path):
+            return silver_candidate, silver_candidate.count(), 0, 0
+
+        prior_df = (
+            spark.table(silver_path)
+            .select(["reading_id"] + TRACKED_FIELDS)
+            .withColumn("_prior_exists", F.lit(True))
+            .alias("prior")
+        )
+
+    else:
+
+        if not DeltaTable.isDeltaTable(spark, silver_path):
+            return silver_candidate, silver_candidate.count(), 0, 0
+
+        prior_df = (
+            spark.read.format("delta")
+            .load(silver_path)
+            .select(["reading_id"] + TRACKED_FIELDS)
+            .withColumn("_prior_exists", F.lit(True))
+            .alias("prior")
+        )
 
     # Left join: rows with no prior match → NEW; rows with a match → compare
     joined = silver_candidate.alias("cur").join(prior_df, on="reading_id", how="left")
@@ -391,7 +400,7 @@ def delta_merge(
 
         if not spark.catalog.tableExists(silver_path):
             to_merge.write.mode("overwrite").saveAsTable(silver_path)
-        return
+            return
 
         silver_table = DeltaTable.forName(spark, silver_path)
 

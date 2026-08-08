@@ -91,20 +91,6 @@ if not IS_DATABRICKS:
 
     spark = configure_spark_with_delta_pip(builder).getOrCreate()
 
-context = FrameworkContext(
-    spark=spark,
-    pipeline_name=pipeline_name,
-    pipeline_type=pipeline_type,
-    control_path=paths["control"],
-    quarantine_path=paths["quarantine"],
-    schema_history_path=paths["schema_history"],
-    schema_changes_path=paths["schema_changes"],
-)
-
-context.logger.pipeline_started()
-context.logger.debug(f"Resolved paths: {paths}")
-
-run_id = context.audit.start_run()
 
 if IS_DATABRICKS:
 
@@ -128,9 +114,12 @@ context = FrameworkContext(
     pipeline_name=pipeline_name,
     pipeline_type=pipeline_type,
     control_path=paths["control"],
+    control_table=paths["control_table"],
     quarantine_path=paths["quarantine"],
     schema_history_path=paths["schema_history"],
+    schema_history_table=paths["schema_history_table"],
     schema_changes_path=paths["schema_changes"],
+    schema_changes_table=paths["schema_changes_table"],
     run_id=shared_run_id,
     execution_id=shared_execution_id,
 )
@@ -226,12 +215,27 @@ context.control.start_run(
 
 # ------------------------------------------------------------------
 
-BRONZE_PATH = paths["bronze"]
-SILVER_PATH = paths["silver"]
-GOLD_PATH = paths["gold"]
-RECON_PATH = paths["reconciliation"]
+if IS_DATABRICKS:
 
-REPORT_DIR = config["reports_directory"]
+    BRONZE_PATH = paths["bronze_table"]
+    SILVER_PATH = paths["silver_table"]
+    GOLD_PATH = paths["gold_table"]
+    RECON_PATH = paths["reconciliation_table"]
+    CONTROL_PATH = paths["control_table"]
+    AUDIT_PATH = paths["audit_table"]
+    SCHEMA_PATH = paths["schema_history_table"]
+    QUARANTINE_PATH = paths["quarantine_table"]
+
+else:
+
+    BRONZE_PATH = paths["bronze"]
+    SILVER_PATH = paths["silver"]
+    GOLD_PATH = paths["gold"]
+    RECON_PATH = paths["reconciliation"]
+    CONTROL_PATH = paths["control"]
+    AUDIT_PATH = paths["audit"]
+    SCHEMA_PATH = paths["schema_history"]
+    QUARANTINE_PATH = paths["quarantine"]
 
 os.makedirs(REPORT_DIR, exist_ok=True)
 
@@ -309,8 +313,6 @@ try:
     validation["bronze_rows"] = bronze_rows
     validation["silver_rows"] = silver_rows
     validation["gold_rows"] = gold_rows
-
-    CONTROL_PATH = paths["control"]
 
     if IS_DATABRICKS:
         validation["control_exists"] = spark.catalog.tableExists(CONTROL_PATH)
@@ -416,8 +418,6 @@ try:
     # --------------------------------------------------------
     # ------------------------------------------------------------------
 
-    AUDIT_PATH = paths["audit"]
-
     if IS_DATABRICKS:
         validation["audit_exists"] = spark.catalog.tableExists(AUDIT_PATH)
     else:
@@ -452,8 +452,6 @@ try:
     else:
         errors.append("Audit table missing.")
 
-    SCHEMA_PATH = paths["schema_history"]
-
     if IS_DATABRICKS:
         validation["schema_history_exists"] = spark.catalog.tableExists(SCHEMA_PATH)
     else:
@@ -470,8 +468,6 @@ try:
 
     else:
         errors.append("Schema history missing.")
-
-    QUARANTINE_PATH = paths["quarantine"]
 
     if IS_DATABRICKS:
         validation["quarantine_exists"] = spark.catalog.tableExists(QUARANTINE_PATH)
@@ -589,7 +585,7 @@ except Exception as exc:
     )
 
     context.logger.pipeline_failed(str(exc))
-    context.exception("Validation failed", exc)
+    context.logger.exception(f"Validation failed: {exc}")
 
     raise
 
